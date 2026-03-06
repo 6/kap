@@ -1,8 +1,9 @@
 #!/bin/bash
-# Smoke test for proxy enforcement inside the devcontainer.
-# Run this from the app container to verify devcontainer-guard works.
+# Smoke test for devcontainer-guard enforcement.
+# Run this from the app container to verify all three layers work.
 set -euo pipefail
 
+PROXY_IP="172.28.0.3"
 PASS=0
 FAIL=0
 
@@ -12,7 +13,9 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 echo "=== devg smoke tests ==="
 echo ""
 
-# --- Test 1: Allowed HTTPS domain ---
+# --- Domain proxy tests ---
+echo "--- Domain proxy ---"
+
 echo "[1] HTTPS to allowed domain (github.com)"
 if curl -sf --max-time 10 -o /dev/null https://github.com; then
   pass "curl to github.com succeeded"
@@ -20,7 +23,6 @@ else
   fail "curl to github.com failed (expected success)"
 fi
 
-# --- Test 2: Denied HTTPS domain ---
 echo "[2] HTTPS to blocked domain (example.com)"
 HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' https://example.com 2>/dev/null || true)
 if [ "$HTTP_CODE" = "403" ] || [ "$HTTP_CODE" = "000" ]; then
@@ -29,18 +31,61 @@ else
   fail "curl to example.com returned HTTP $HTTP_CODE (expected 403 or connection refused)"
 fi
 
-# --- Test 3: Proxy is reachable from app container ---
 echo "[3] proxy reachable on internal network"
-if curl -sf --max-time 5 -o /dev/null -x http://proxy:3128 http://github.com; then
-  pass "proxy at proxy:3128 is reachable"
+if curl -sf --max-time 5 -o /dev/null -x "http://$PROXY_IP:3128" http://github.com; then
+  pass "proxy at $PROXY_IP:3128 is reachable"
 else
-  fail "proxy at proxy:3128 is not reachable"
+  fail "proxy at $PROXY_IP:3128 is not reachable"
 fi
 
-# --- Test 4: cargo fetch works through proxy ---
-echo "[4] cargo fetch through proxy"
+# --- DNS forwarder tests ---
+echo ""
+echo "--- DNS forwarder ---"
+
+echo "[4] DNS resolves allowed domain (github.com)"
+if dig +short +time=5 github.com | grep -q .; then
+  pass "github.com resolved"
+else
+  fail "github.com did not resolve (expected A record)"
+fi
+
+echo "[5] DNS blocks disallowed domain (evil.example.com)"
+RESULT=$(dig +short +time=5 evil.example.com 2>/dev/null || true)
+if [ -z "$RESULT" ]; then
+  pass "evil.example.com returned empty (NXDOMAIN)"
+else
+  fail "evil.example.com resolved to $RESULT (expected NXDOMAIN)"
+fi
+
+echo "[6] DNS resolves wildcard subdomain (api.github.com)"
+if dig +short +time=5 api.github.com | grep -q .; then
+  pass "api.github.com resolved (matches *.github.com)"
+else
+  fail "api.github.com did not resolve"
+fi
+
+# --- MCP proxy tests ---
+echo ""
+echo "--- MCP proxy ---"
+
+echo "[7] MCP proxy endpoint reachable"
+MCP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --noproxy '*' \
+  -X POST "http://$PROXY_IP:3129/nonexistent" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || true)
+if [ "$MCP_STATUS" = "404" ]; then
+  pass "MCP proxy returned 404 for unknown server (endpoint is up)"
+else
+  fail "MCP proxy returned $MCP_STATUS (expected 404)"
+fi
+
+# --- Cargo fetch (end-to-end: DNS + proxy + TLS) ---
+echo ""
+echo "--- End-to-end ---"
+
+echo "[8] cargo fetch through proxy"
 if cargo fetch --manifest-path /workspaces/devcontainer-guard/Cargo.toml 2>&1 | tail -1; then
-  pass "cargo fetch succeeded through proxy"
+  pass "cargo fetch succeeded (DNS + proxy + TLS all working)"
 else
   fail "cargo fetch failed"
 fi
