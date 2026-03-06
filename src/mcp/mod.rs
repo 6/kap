@@ -72,7 +72,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                 Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
             match StoredAuth::load(&auth_path) {
                 Ok(auth) => UpstreamClient::new(server_cfg.upstream.clone(), auth, headers),
-                Err(e) if has_headers => {
+                Err(_) if has_headers => {
                     eprintln!("[mcp] {} using headers only (no OAuth)", server_cfg.name);
                     UpstreamClient::with_headers_only(server_cfg.upstream.clone(), headers)
                 }
