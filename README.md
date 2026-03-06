@@ -22,27 +22,25 @@ $EDITOR /path/to/your/project/.devcontainer/devp.toml
 devcontainer up --workspace-folder /path/to/your/project
 ```
 
-## Built-in profiles
+## Configuration
 
-Profiles are curated domain lists for common ecosystems. Enable them in `devp.toml`:
-
-| Profile | Domains |
-|---------|---------|
-| `github` | github.com, api.github.com, *.githubusercontent.com, ... |
-| `rust` | crates.io, *.crates.io, rustup.rs, *.rust-lang.org, ... |
-| `node` | registry.npmjs.org, *.npmjs.org, *.yarnpkg.com, ... |
-| `python` | pypi.org, files.pythonhosted.org, ... |
-| `ruby` | rubygems.org, bundler.io, *.ruby-lang.org, ... |
-| `go` | proxy.golang.org, sum.golang.org, storage.googleapis.com |
-| `apt` | *.ubuntu.com, *.debian.org, ... |
-| `ai` | api.anthropic.com, api.openai.com, ... |
+The config is a flat domain allowlist in `devp.toml`. `devp init` detects your project language and generates a starting list.
 
 ```toml
 [proxy.network]
-profiles = ["github", "rust", "apt"]
-allow = ["internal.mycompany.com"]   # additional domains
-deny = ["gist.github.com"]           # overrides profiles
+allow = [
+  "github.com",
+  "api.github.com",
+  "*.githubusercontent.com",
+  "crates.io",
+  "*.crates.io",
+  "*.ubuntu.com",
+]
+# deny overrides allow:
+deny = ["gist.github.com"]
 ```
+
+Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win.
 
 ## Architecture
 
@@ -88,7 +86,7 @@ cargo test           # run all tests (34 tests)
 cargo clippy         # lint
 ```
 
-This repo includes a `.devcontainer/` that dogfoods devp itself — it builds from source and runs with the `github`, `rust`, `apt`, and `ai` profiles. Open it in VS Code or run:
+This repo includes a `.devcontainer/` that dogfoods devp itself — it builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
 
 ```bash
 devcontainer up --workspace-folder .

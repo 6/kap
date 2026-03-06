@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
-use crate::profiles;
-
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -28,8 +26,6 @@ pub struct ProxyConfig {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct NetworkConfig {
-    #[serde(default)]
-    pub profiles: Vec<String>,
     #[serde(default)]
     pub allow: Vec<String>,
     #[serde(default)]
@@ -72,18 +68,8 @@ impl Config {
         }
     }
 
-    /// Resolve all allowed domains from profiles + explicit allow list.
-    pub fn resolved_allow_domains(&self) -> Vec<String> {
-        let mut domains = Vec::new();
-        for profile_name in &self.proxy.network.profiles {
-            if let Some(profile_domains) = profiles::get(profile_name) {
-                domains.extend(profile_domains.iter().map(|s| s.to_string()));
-            } else {
-                eprintln!("warning: unknown profile '{profile_name}'");
-            }
-        }
-        domains.extend(self.proxy.network.allow.clone());
-        domains
+    pub fn allow_domains(&self) -> &[String] {
+        &self.proxy.network.allow
     }
 }
 
@@ -176,8 +162,7 @@ dns_listen = "0.0.0.0:5353"
 dns_upstream = "1.1.1.1:53"
 
 [proxy.network]
-profiles = ["github", "rust"]
-allow = ["custom.com"]
+allow = ["github.com", "crates.io", "custom.com"]
 deny = ["gist.github.com"]
 
 [proxy.observe]
@@ -194,8 +179,10 @@ hosts = ["github.com", "github.example.com"]
         assert_eq!(config.proxy.listen, "0.0.0.0:9999");
         assert_eq!(config.proxy.dns_listen, "0.0.0.0:5353");
         assert_eq!(config.proxy.dns_upstream, "1.1.1.1:53");
-        assert_eq!(config.proxy.network.profiles, vec!["github", "rust"]);
-        assert_eq!(config.proxy.network.allow, vec!["custom.com"]);
+        assert_eq!(
+            config.proxy.network.allow,
+            vec!["github.com", "crates.io", "custom.com"]
+        );
         assert_eq!(config.proxy.network.deny, vec!["gist.github.com"]);
         assert_eq!(config.proxy.observe.log, "/tmp/test.jsonl");
         assert_eq!(config.credentials.socket, "/tmp/cred.sock");
@@ -208,7 +195,6 @@ hosts = ["github.com", "github.example.com"]
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
         assert_eq!(config.proxy.dns_listen, "0.0.0.0:53");
         assert_eq!(config.proxy.dns_upstream, "8.8.8.8:53");
-        assert!(config.proxy.network.profiles.is_empty());
         assert!(config.proxy.network.allow.is_empty());
         assert!(config.proxy.network.deny.is_empty());
         assert_eq!(config.credentials.socket, "/devp-sockets/cred.sock");
@@ -216,28 +202,16 @@ hosts = ["github.com", "github.example.com"]
     }
 
     #[test]
-    fn resolved_allow_domains_merges_profiles_and_allow() {
+    fn allow_domains_returns_allow_list() {
         let toml = r#"
 [proxy.network]
-profiles = ["github"]
-allow = ["custom.com"]
+allow = ["github.com", "custom.com"]
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        let domains = config.resolved_allow_domains();
-        assert!(domains.contains(&"github.com".to_string()));
-        assert!(domains.contains(&"api.github.com".to_string()));
-        assert!(domains.contains(&"custom.com".to_string()));
-    }
-
-    #[test]
-    fn unknown_profile_skipped() {
-        let toml = r#"
-[proxy.network]
-profiles = ["nonexistent"]
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let domains = config.resolved_allow_domains();
-        assert!(domains.is_empty());
+        let domains = config.allow_domains();
+        assert_eq!(domains.len(), 2);
+        assert_eq!(domains[0], "github.com");
+        assert_eq!(domains[1], "custom.com");
     }
 
     #[test]

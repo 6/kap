@@ -3,7 +3,6 @@ mod config;
 mod cred_server;
 mod credential;
 mod init;
-mod profiles;
 mod proxy;
 
 use clap::{Parser, Subcommand};

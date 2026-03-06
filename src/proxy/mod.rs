@@ -25,10 +25,10 @@ struct ProxyState {
 }
 
 pub async fn run(config: Config, observe: bool) -> Result<()> {
-    let allow_domains = config.resolved_allow_domains();
-    let deny_domains = config.proxy.network.deny.clone();
+    let allow_domains = config.allow_domains();
+    let deny_domains = &config.proxy.network.deny;
 
-    let allowlist = Allowlist::new(&allow_domains, &deny_domains);
+    let allowlist = Allowlist::new(allow_domains, deny_domains);
     let logger = ProxyLogger::new(&config.proxy.observe.log);
 
     let state = Arc::new(ProxyState {
@@ -42,7 +42,7 @@ pub async fn run(config: Config, observe: bool) -> Result<()> {
     let dns_upstream = config.proxy.dns_upstream.clone();
 
     // Start DNS forwarder in background
-    let dns_allowlist = Arc::new(Allowlist::new(&allow_domains, &deny_domains));
+    let dns_allowlist = Arc::new(Allowlist::new(allow_domains, deny_domains));
     tokio::spawn(async move {
         if let Err(e) = dns::run(&dns_listen, &dns_upstream, dns_allowlist).await {
             eprintln!("[dns] fatal: {e}");

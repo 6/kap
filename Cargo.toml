@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-glob-match = "0.2"
 hyper = { version = "1", features = ["http1", "server", "client"] }
 libc = "0.2"
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }

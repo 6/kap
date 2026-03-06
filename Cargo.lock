@@ -187,7 +187,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "glob-match",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -234,12 +233,6 @@ name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
-
-[[package]]
-name = "glob-match"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
 
 [[package]]
 name = "hashbrown"

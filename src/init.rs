@@ -21,18 +21,13 @@ pub fn run(project_dir: &str) -> Result<()> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "my-project".to_string());
 
-    // Detect language profiles
-    let profiles = detect_profiles(project);
-    let profiles_toml = profiles
-        .iter()
-        .map(|p| format!("\"{p}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Detect domains for this project
+    let domains = detect_domains(project);
 
     // Write config
     write_file(
         &devcontainer_dir.join("devp.toml"),
-        &generate_config(&profiles_toml),
+        &generate_config(&domains),
     )?;
 
     // Write docker-compose.yml
@@ -73,7 +68,7 @@ pub fn run(project_dir: &str) -> Result<()> {
     println!("  Dockerfile.proxy     - proxy sidecar");
     println!("  setup.sh             - post-create setup (add your toolchains here)");
     println!();
-    println!("Detected profiles: {profiles:?}");
+    println!("Detected {} allowed domains.", domains.len());
     println!();
     println!("Next steps:");
     println!("  1. Review devp.toml and adjust allowed domains");
@@ -83,32 +78,108 @@ pub fn run(project_dir: &str) -> Result<()> {
     Ok(())
 }
 
-fn detect_profiles(project: &Path) -> Vec<&'static str> {
-    let mut profiles = vec!["github", "ai", "apt"];
+// Domain lists for common ecosystems, used to generate allowlists.
+const GITHUB_DOMAINS: &[&str] = &[
+    "github.com",
+    "api.github.com",
+    "*.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "codeload.github.com",
+];
+
+const AI_DOMAINS: &[&str] = &[
+    "api.anthropic.com",
+    "anthropic.com",
+    "*.anthropic.com",
+    "api.openai.com",
+    "openai.com",
+    "*.openai.com",
+    "generativelanguage.googleapis.com",
+];
+
+const APT_DOMAINS: &[&str] = &[
+    "*.ubuntu.com",
+    "*.debian.org",
+    "deb.debian.org",
+    "security.debian.org",
+    "archive.ubuntu.com",
+    "security.ubuntu.com",
+];
+
+const RUBY_DOMAINS: &[&str] = &[
+    "rubygems.org",
+    "*.rubygems.org",
+    "bundler.io",
+    "*.ruby-lang.org",
+    "index.rubygems.org",
+];
+
+const NODE_DOMAINS: &[&str] = &[
+    "registry.npmjs.org",
+    "*.npmjs.org",
+    "*.npmjs.com",
+    "nodejs.org",
+    "*.yarnpkg.com",
+];
+
+const RUST_DOMAINS: &[&str] = &[
+    "crates.io",
+    "*.crates.io",
+    "static.crates.io",
+    "rustup.rs",
+    "*.rust-lang.org",
+    "static.rust-lang.org",
+];
+
+const PYTHON_DOMAINS: &[&str] = &[
+    "pypi.org",
+    "*.pypi.org",
+    "files.pythonhosted.org",
+    "*.pythonhosted.org",
+];
+
+const GO_DOMAINS: &[&str] = &[
+    "proxy.golang.org",
+    "sum.golang.org",
+    "storage.googleapis.com",
+];
+
+fn detect_domains(project: &Path) -> Vec<&'static str> {
+    let mut domains = Vec::new();
+    domains.extend_from_slice(GITHUB_DOMAINS);
+    domains.extend_from_slice(AI_DOMAINS);
+    domains.extend_from_slice(APT_DOMAINS);
 
     if project.join("Gemfile").exists() || project.join("Gemfile.lock").exists() {
-        profiles.push("ruby");
+        domains.extend_from_slice(RUBY_DOMAINS);
     }
     if project.join("package.json").exists() {
-        profiles.push("node");
+        domains.extend_from_slice(NODE_DOMAINS);
     }
     if project.join("Cargo.toml").exists() {
-        profiles.push("rust");
+        domains.extend_from_slice(RUST_DOMAINS);
     }
     if project.join("pyproject.toml").exists()
         || project.join("requirements.txt").exists()
         || project.join("setup.py").exists()
     {
-        profiles.push("python");
+        domains.extend_from_slice(PYTHON_DOMAINS);
     }
     if project.join("go.mod").exists() {
-        profiles.push("go");
+        domains.extend_from_slice(GO_DOMAINS);
     }
 
-    profiles
+    domains
 }
 
-fn generate_config(profiles_toml: &str) -> String {
+fn generate_config(domains: &[&str]) -> String {
+    let allow_toml = domains
+        .iter()
+        .map(|d| format!("  \"{d}\""))
+        .collect::<Vec<_>>()
+        .join(",\n");
+
     format!(
         r#"# devp.toml — proxy and credential configuration
 
@@ -118,10 +189,10 @@ dns_listen = "0.0.0.0:53"
 dns_upstream = "8.8.8.8:53"
 
 [proxy.network]
-profiles = [{profiles_toml}]
-# Add project-specific domains:
-# allow = ["internal.mycompany.com"]
-# Block specific domains (overrides profiles):
+allow = [
+{allow_toml},
+]
+# deny overrides allow:
 # deny = ["gist.github.com"]
 
 [proxy.observe]
@@ -297,22 +368,24 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn detect_profiles_rust_project() {
+    fn detect_domains_rust_project() {
         let dir = tempdir("rust");
         fs::write(dir.join("Cargo.toml"), "").unwrap();
-        let profiles = detect_profiles(&dir);
-        assert!(profiles.contains(&"rust"));
-        assert!(profiles.contains(&"github"));
-        assert!(profiles.contains(&"ai"));
-        assert!(profiles.contains(&"apt"));
+        let domains = detect_domains(&dir);
+        assert!(domains.contains(&"crates.io"));
+        assert!(domains.contains(&"github.com"));
+        assert!(domains.contains(&"api.anthropic.com"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn detect_profiles_empty_project() {
+    fn detect_domains_empty_project() {
         let dir = tempdir("empty");
-        let profiles = detect_profiles(&dir);
-        assert_eq!(profiles, vec!["github", "ai", "apt"]);
+        let domains = detect_domains(&dir);
+        assert!(domains.contains(&"github.com"));
+        assert!(domains.contains(&"api.anthropic.com"));
+        assert!(!domains.contains(&"crates.io"));
+        assert!(!domains.contains(&"registry.npmjs.org"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -330,7 +403,7 @@ mod tests {
 
         let config = fs::read_to_string(dc.join("devp.toml")).unwrap();
         assert!(config.contains("[proxy]"));
-        assert!(config.contains("profiles ="));
+        assert!(config.contains("allow ="));
 
         let compose = fs::read_to_string(dc.join("docker-compose.yml")).unwrap();
         assert!(compose.contains("services:"));

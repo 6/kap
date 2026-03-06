@@ -24,8 +24,7 @@ Docker Compose with an internal network ensures the app container has no externa
 ## Key modules
 
 - `src/main.rs` — clap CLI dispatch
-- `src/config.rs` — TOML config parsing + profile resolution
-- `src/profiles.rs` — built-in ecosystem domain profiles (ruby, node, python, rust, go, apt, github, ai)
+- `src/config.rs` — TOML config parsing (allow/deny domain lists)
 - `src/proxy/mod.rs` — HTTP/HTTPS forward proxy (hyper + tokio)
 - `src/proxy/allowlist.rs` — wildcard domain matching, deny-overrides-allow
 - `src/proxy/dns.rs` — UDP DNS forwarder with domain filtering
