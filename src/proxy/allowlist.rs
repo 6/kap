@@ -2,7 +2,6 @@
 ///
 /// Supports exact matches ("github.com") and wildcard prefixes ("*.github.com").
 /// Deny rules take precedence over allow rules.
-
 pub struct Allowlist {
     allow: Vec<DomainPattern>,
     deny: Vec<DomainPattern>,
@@ -39,8 +38,8 @@ impl DomainPattern {
         let pattern = pattern.to_lowercase();
         if let Some(suffix) = pattern.strip_prefix("*.") {
             DomainPattern::Wildcard(format!(".{suffix}"))
-        } else if pattern.starts_with('*') {
-            DomainPattern::Wildcard(pattern[1..].to_string())
+        } else if let Some(suffix) = pattern.strip_prefix('*') {
+            DomainPattern::Wildcard(suffix.to_string())
         } else {
             DomainPattern::Exact(pattern)
         }

@@ -66,6 +66,7 @@ pub async fn run(config: Config, observe: bool) -> Result<()> {
                 async move { handle_request(req, &state, addr.to_string()).await }
             });
 
+            #[allow(clippy::collapsible_if)]
             if let Err(e) = http1::Builder::new()
                 .preserve_header_case(true)
                 .title_case_headers(true)
@@ -239,5 +240,130 @@ async fn handle_http(
                 .body(Full::new(Bytes::from(format!("Bad Gateway: {e}\n"))))
                 .unwrap())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn start_proxy(allow: &[&str], deny: &[&str], observe: bool) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let mut config = Config::default();
+        config.proxy.listen = format!("127.0.0.1:{port}");
+        config.proxy.dns_listen = "127.0.0.1:0".to_string();
+        config.proxy.network.allow = allow.iter().map(|s| s.to_string()).collect();
+        config.proxy.network.deny = deny.iter().map(|s| s.to_string()).collect();
+        config.proxy.observe.log = "/dev/null".to_string();
+
+        tokio::spawn(async move {
+            let _ = run(config, observe).await;
+        });
+
+        for _ in 0..100 {
+            if TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .is_ok()
+            {
+                return port;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("proxy did not start");
+    }
+
+    async fn raw_request(port: u16, req: &str) -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("read timed out")
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+
+    #[tokio::test]
+    async fn denies_http_to_unlisted_domain() {
+        let port = start_proxy(&["allowed.test"], &[], false).await;
+        let resp = raw_request(
+            port,
+            "GET http://denied.test/ HTTP/1.1\r\nHost: denied.test\r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("403"), "expected 403, got: {resp}");
+        assert!(resp.contains("denied.test"));
+    }
+
+    #[tokio::test]
+    async fn allows_http_to_listed_domain() {
+        let port = start_proxy(&["127.0.0.1"], &[], false).await;
+        // Port 1 is closed, so proxy will allow but get connection refused → 502
+        let resp = raw_request(
+            port,
+            "GET http://127.0.0.1:1/test HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+        .await;
+        assert!(!resp.contains("403"), "should not be denied, got: {resp}");
+        assert!(
+            resp.contains("502"),
+            "expected 502 Bad Gateway, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn denies_connect_to_unlisted_domain() {
+        let port = start_proxy(&["allowed.test"], &[], false).await;
+        let resp = raw_request(
+            port,
+            "CONNECT denied.test:443 HTTP/1.1\r\nHost: denied.test:443\r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("403"), "expected 403, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn allows_connect_to_listed_domain() {
+        let port = start_proxy(&["allowed.test"], &[], false).await;
+        let resp = raw_request(
+            port,
+            "CONNECT allowed.test:443 HTTP/1.1\r\nHost: allowed.test:443\r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn deny_overrides_allow_in_proxy() {
+        let port = start_proxy(&["*.example.com"], &["blocked.example.com"], false).await;
+        let resp = raw_request(
+            port,
+            "GET http://blocked.example.com/ HTTP/1.1\r\nHost: blocked.example.com\r\n\r\n",
+        )
+        .await;
+        assert!(
+            resp.contains("403"),
+            "deny should override allow, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn observe_mode_allows_all() {
+        let port = start_proxy(&[], &[], true).await;
+        let resp = raw_request(
+            port,
+            "CONNECT anything.test:443 HTTP/1.1\r\nHost: anything.test:443\r\n\r\n",
+        )
+        .await;
+        assert!(
+            resp.contains("200"),
+            "observe mode should allow all, got: {resp}"
+        );
     }
 }

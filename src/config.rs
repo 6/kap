@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::profiles;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
@@ -26,7 +26,7 @@ pub struct ProxyConfig {
     pub observe: ObserveConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub profiles: Vec<String>,
@@ -44,6 +44,7 @@ pub struct ObserveConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct CredentialConfig {
+    #[allow(dead_code)]
     #[serde(default = "default_socket")]
     pub socket: String,
     #[serde(default = "default_host_socket")]
@@ -86,15 +87,6 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            proxy: ProxyConfig::default(),
-            credentials: CredentialConfig::default(),
-        }
-    }
-}
-
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
@@ -103,16 +95,6 @@ impl Default for ProxyConfig {
             dns_upstream: default_dns_upstream(),
             network: NetworkConfig::default(),
             observe: ObserveConfig::default(),
-        }
-    }
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            profiles: vec![],
-            allow: vec![],
-            deny: vec![],
         }
     }
 }
@@ -171,6 +153,7 @@ fn default_github_hosts() -> Vec<String> {
     vec!["github.com".to_string()]
 }
 
+#[allow(clippy::collapsible_if)]
 fn shellexpand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -178,4 +161,92 @@ fn shellexpand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_full_config() {
+        let toml = r#"
+[proxy]
+listen = "0.0.0.0:9999"
+dns_listen = "0.0.0.0:5353"
+dns_upstream = "1.1.1.1:53"
+
+[proxy.network]
+profiles = ["github", "rust"]
+allow = ["custom.com"]
+deny = ["gist.github.com"]
+
+[proxy.observe]
+log = "/tmp/test.jsonl"
+
+[credentials]
+socket = "/tmp/cred.sock"
+host_socket = "/tmp/host-cred.sock"
+
+[credentials.github]
+hosts = ["github.com", "github.example.com"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.proxy.listen, "0.0.0.0:9999");
+        assert_eq!(config.proxy.dns_listen, "0.0.0.0:5353");
+        assert_eq!(config.proxy.dns_upstream, "1.1.1.1:53");
+        assert_eq!(config.proxy.network.profiles, vec!["github", "rust"]);
+        assert_eq!(config.proxy.network.allow, vec!["custom.com"]);
+        assert_eq!(config.proxy.network.deny, vec!["gist.github.com"]);
+        assert_eq!(config.proxy.observe.log, "/tmp/test.jsonl");
+        assert_eq!(config.credentials.socket, "/tmp/cred.sock");
+        assert_eq!(config.credentials.github.hosts.len(), 2);
+    }
+
+    #[test]
+    fn parse_empty_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.proxy.listen, "0.0.0.0:3128");
+        assert_eq!(config.proxy.dns_listen, "0.0.0.0:53");
+        assert_eq!(config.proxy.dns_upstream, "8.8.8.8:53");
+        assert!(config.proxy.network.profiles.is_empty());
+        assert!(config.proxy.network.allow.is_empty());
+        assert!(config.proxy.network.deny.is_empty());
+        assert_eq!(config.credentials.socket, "/devp-sockets/cred.sock");
+        assert_eq!(config.credentials.github.hosts, vec!["github.com"]);
+    }
+
+    #[test]
+    fn resolved_allow_domains_merges_profiles_and_allow() {
+        let toml = r#"
+[proxy.network]
+profiles = ["github"]
+allow = ["custom.com"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let domains = config.resolved_allow_domains();
+        assert!(domains.contains(&"github.com".to_string()));
+        assert!(domains.contains(&"api.github.com".to_string()));
+        assert!(domains.contains(&"custom.com".to_string()));
+    }
+
+    #[test]
+    fn unknown_profile_skipped() {
+        let toml = r#"
+[proxy.network]
+profiles = ["nonexistent"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let domains = config.resolved_allow_domains();
+        assert!(domains.is_empty());
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let expanded = shellexpand_tilde("~/foo/bar");
+        assert!(!expanded.starts_with("~/"));
+        assert!(expanded.ends_with("/foo/bar"));
+
+        let unchanged = shellexpand_tilde("/absolute/path");
+        assert_eq!(unchanged, "/absolute/path");
+    }
 }

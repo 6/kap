@@ -290,3 +290,67 @@ echo 'HISTFILE=/commandhistory/.zsh_history' >> ~/.zshrc
 fn write_file(path: &Path, content: &str) -> Result<()> {
     std::fs::write(path, content).with_context(|| format!("writing {}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn detect_profiles_rust_project() {
+        let dir = tempdir("rust");
+        fs::write(dir.join("Cargo.toml"), "").unwrap();
+        let profiles = detect_profiles(&dir);
+        assert!(profiles.contains(&"rust"));
+        assert!(profiles.contains(&"github"));
+        assert!(profiles.contains(&"ai"));
+        assert!(profiles.contains(&"apt"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn detect_profiles_empty_project() {
+        let dir = tempdir("empty");
+        let profiles = detect_profiles(&dir);
+        assert_eq!(profiles, vec!["github", "ai", "apt"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scaffolds_all_files() {
+        let dir = tempdir("scaffold");
+        run(dir.to_str().unwrap()).unwrap();
+        let dc = dir.join(".devcontainer");
+        assert!(dc.join("devp.toml").exists());
+        assert!(dc.join("docker-compose.yml").exists());
+        assert!(dc.join("devcontainer.json").exists());
+        assert!(dc.join("Dockerfile").exists());
+        assert!(dc.join("Dockerfile.proxy").exists());
+        assert!(dc.join("setup.sh").exists());
+
+        let config = fs::read_to_string(dc.join("devp.toml")).unwrap();
+        assert!(config.contains("[proxy]"));
+        assert!(config.contains("profiles ="));
+
+        let compose = fs::read_to_string(dc.join("docker-compose.yml")).unwrap();
+        assert!(compose.contains("services:"));
+        assert!(compose.contains("proxy:"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn init_fails_if_devcontainer_exists() {
+        let dir = tempdir("exists");
+        run(dir.to_str().unwrap()).unwrap();
+        assert!(run(dir.to_str().unwrap()).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn tempdir(suffix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("devp-test-{}-{suffix}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}

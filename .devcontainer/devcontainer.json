@@ -1,0 +1,21 @@
+{
+  "name": "devcontainer-egress-proxy",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/devcontainer-egress-proxy",
+  "initializeCommand": "command -v devp >/dev/null && devp cred-server --daemonize || echo 'WARN: devp not on PATH, skipping cred-server (git credentials will not be available)'",
+  "postCreateCommand": ".devcontainer/setup.sh",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy"
+      }
+    }
+  }
+}

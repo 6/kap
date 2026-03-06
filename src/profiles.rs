@@ -1,6 +1,5 @@
 /// Built-in ecosystem domain profiles.
 /// Each profile is a curated set of domains needed by a specific ecosystem.
-
 pub fn get(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "ruby" => Some(RUBY),
@@ -15,6 +14,7 @@ pub fn get(name: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+#[cfg(test)]
 pub fn all_names() -> &'static [&'static str] {
     &[
         "ruby", "node", "python", "rust", "go", "apt", "github", "ai",
@@ -86,3 +86,33 @@ const AI: &[&str] = &[
     "*.openai.com",
     "generativelanguage.googleapis.com",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_profiles_return_domains() {
+        for name in all_names() {
+            assert!(
+                get(name).is_some(),
+                "profile '{name}' listed in all_names() but get() returned None"
+            );
+            assert!(
+                !get(name).unwrap().is_empty(),
+                "profile '{name}' has no domains"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_profile_returns_none() {
+        assert!(get("nonexistent").is_none());
+        assert!(get("").is_none());
+    }
+
+    #[test]
+    fn all_names_complete() {
+        assert_eq!(all_names().len(), 8);
+    }
+}

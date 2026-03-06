@@ -58,9 +58,9 @@ pub async fn run(operation: &str, socket_path: &str) -> Result<()> {
 pub fn install() -> Result<()> {
     // Write a gitconfig that uses devp as the credential helper
     let gitconfig_path = dirs_next().join(".gitconfig-devp");
-    let content = format!(
+    let content =
         "[credential]\n    helper = !devp credential --socket /devp-sockets/cred.sock get\n"
-    );
+            .to_string();
     std::fs::write(&gitconfig_path, content)?;
 
     // Point GIT_CONFIG_GLOBAL to this file (set in docker-compose.yml env)

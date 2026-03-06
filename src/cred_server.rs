@@ -138,6 +138,7 @@ async fn get_gh_token() -> Result<String> {
     Ok(token)
 }
 
+#[allow(clippy::collapsible_if)]
 fn shellexpand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -145,4 +146,78 @@ fn shellexpand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn temp_socket(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("devp-test-{}-{name}.sock", std::process::id()))
+    }
+
+    #[tokio::test]
+    async fn rejects_non_https_protocol() {
+        let path = temp_socket("proto");
+        let _ = std::fs::remove_file(&path);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let hosts = vec!["github.com".to_string()];
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_client(stream, &hosts).await.unwrap();
+        });
+
+        let mut client = tokio::net::UnixStream::connect(&path).await.unwrap();
+        client
+            .write_all(b"protocol=http\nhost=github.com\n\n")
+            .await
+            .unwrap();
+
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut response),
+        )
+        .await
+        .expect("timed out")
+        .unwrap();
+
+        assert_eq!(response, b"\n");
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn rejects_unlisted_host() {
+        let path = temp_socket("host");
+        let _ = std::fs::remove_file(&path);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let hosts = vec!["github.com".to_string()];
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_client(stream, &hosts).await.unwrap();
+        });
+
+        let mut client = tokio::net::UnixStream::connect(&path).await.unwrap();
+        client
+            .write_all(b"protocol=https\nhost=evil.com\n\n")
+            .await
+            .unwrap();
+
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut response),
+        )
+        .await
+        .expect("timed out")
+        .unwrap();
+
+        assert_eq!(response, b"\n");
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
 }

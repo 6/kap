@@ -121,3 +121,29 @@ pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_entry_serializes_to_json() {
+        let entry = ProxyLogEntry::new("github.com", "allowed", "CONNECT");
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["domain"], "github.com");
+        assert_eq!(parsed["action"], "allowed");
+        assert_eq!(parsed["method"], "CONNECT");
+        assert!(parsed["ts"].is_string());
+    }
+
+    #[test]
+    fn log_entry_actions() {
+        for action in &["allowed", "denied", "observed"] {
+            let entry = ProxyLogEntry::new("test.com", action, "GET");
+            assert_eq!(entry.action, *action);
+            assert_eq!(entry.domain, "test.com");
+            assert_eq!(entry.method, "GET");
+        }
+    }
+}

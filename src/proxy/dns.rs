@@ -29,7 +29,6 @@ pub async fn run(listen: &str, upstream: &str, allowlist: Arc<Allowlist>) -> Res
         let (len, src) = sock.recv_from(&mut buf).await?;
         let query = buf[..len].to_vec();
         let sock = sock.clone();
-        let upstream_addr = upstream_addr;
         let allowlist = allowlist.clone();
 
         tokio::spawn(async move {
@@ -206,5 +205,14 @@ mod tests {
         let flags = u16::from_be_bytes([resp[2], resp[3]]);
         assert!(flags & FLAG_RESPONSE != 0, "should be a response");
         assert_eq!(flags & 0x000F, 3, "rcode should be NXDOMAIN (3)");
+    }
+
+    #[test]
+    fn servfail_response_has_correct_rcode() {
+        let query = build_query("timeout.com");
+        let resp = build_error_response(&query, FLAG_RCODE_SERVFAIL);
+        let flags = u16::from_be_bytes([resp[2], resp[3]]);
+        assert!(flags & FLAG_RESPONSE != 0, "should be a response");
+        assert_eq!(flags & 0x000F, 2, "rcode should be SERVFAIL (2)");
     }
 }
