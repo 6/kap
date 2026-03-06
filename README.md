@@ -1,5 +1,8 @@
 # devcontainer-egress-proxy
 
+> [!WARNING]
+> This is experimental and may have bugs. Use at your own risk.
+
 devcontainer-egress-proxy (`devp`) locks down what an AI coding agent (or any process) can access from inside a devcontainer. It's a proxy sidecar with a domain allowlist — the container can only reach the internet through the proxy.
 
 For HTTPS, the proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). Granularity is at the domain level: `api.github.com` and `gist.github.com` can be independently allowed or denied.
