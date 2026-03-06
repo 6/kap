@@ -32,6 +32,8 @@ services:
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
       - proxy-logs:/var/log/devg
+    environment:
+      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY:-}
     networks:
       sandbox:
       external:

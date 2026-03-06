@@ -118,7 +118,7 @@ cargo test           # run all tests
 cargo clippy         # lint
 ```
 
-This repo includes a `.devcontainer/` that dogfoods devg itself. It builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
+This repo includes a `.devcontainer/` that dogfoods devg itself. It builds from source, runs with GitHub/Rust/APT/AI domains allowed, and proxies [Context7](https://context7.com) as a sample MCP server. Set `CONTEXT7_API_KEY` in your environment to try it (free key from context7.com/dashboard). Open in VS Code or run:
 
 ```bash
 devcontainer up --workspace-folder .

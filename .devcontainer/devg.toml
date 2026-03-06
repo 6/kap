@@ -20,9 +20,20 @@ allow = [
   "openai.com",
   "*.openai.com",
   "generativelanguage.googleapis.com",
+  # Context7 (MCP server, proxied through devg)
+  "mcp.context7.com",
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
 
 [proxy.observe]
 log = "/var/log/devg/proxy.jsonl"
+
+# MCP proxy: tool-level filtering + credential isolation
+[mcp]
+
+[[mcp.servers]]
+name = "context7"
+upstream = "https://mcp.context7.com/mcp"
+headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
+# allow_tools = ["resolve-library-id", "get-library-docs"]
