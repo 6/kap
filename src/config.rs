@@ -82,6 +82,8 @@ pub struct McpConfig {
 pub struct McpServerConfig {
     pub name: String,
     pub upstream: String,
+    /// Env var to use as Bearer token (e.g., "GH_TOKEN"). Skips OAuth auth file.
+    pub token_env: Option<String>,
     #[serde(default)]
     pub allow_tools: Vec<String>,
     #[serde(default)]
@@ -188,5 +190,35 @@ upstream = "https://mcp.example.com/fs"
     fn no_mcp_config_is_none() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.mcp.is_none());
+    }
+
+    #[test]
+    fn parse_mcp_token_env() {
+        let toml = r#"
+[mcp]
+
+[[mcp.servers]]
+name = "github"
+upstream = "https://mcp.github.com"
+token_env = "GH_TOKEN"
+allow_tools = ["get_pull_request"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let mcp = config.mcp.unwrap();
+        assert_eq!(mcp.servers[0].token_env.as_deref(), Some("GH_TOKEN"));
+    }
+
+    #[test]
+    fn parse_mcp_no_token_env() {
+        let toml = r#"
+[mcp]
+
+[[mcp.servers]]
+name = "github"
+upstream = "https://mcp.github.com"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let mcp = config.mcp.unwrap();
+        assert!(mcp.servers[0].token_env.is_none());
     }
 }

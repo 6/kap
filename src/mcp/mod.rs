@@ -36,20 +36,36 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
     let mut servers = HashMap::new();
 
     for server_cfg in &config.servers {
-        let auth_path = Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
-        let auth = match StoredAuth::load(&auth_path) {
-            Ok(auth) => auth,
-            Err(e) => {
-                eprintln!(
-                    "[mcp] skipping {}: no auth found at {} ({e})",
-                    server_cfg.name,
-                    auth_path.display()
-                );
-                continue;
+        // token_env takes priority, then auth file from `devp auth`
+        let client = if let Some(ref env_var) = server_cfg.token_env {
+            match std::env::var(env_var) {
+                Ok(token) if !token.is_empty() => {
+                    eprintln!("[mcp] {} using token from ${env_var}", server_cfg.name);
+                    UpstreamClient::with_static_token(server_cfg.upstream.clone(), token)
+                }
+                _ => {
+                    eprintln!(
+                        "[mcp] skipping {}: ${env_var} is not set or empty",
+                        server_cfg.name
+                    );
+                    continue;
+                }
+            }
+        } else {
+            let auth_path =
+                Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
+            match StoredAuth::load(&auth_path) {
+                Ok(auth) => UpstreamClient::new(server_cfg.upstream.clone(), auth),
+                Err(e) => {
+                    eprintln!(
+                        "[mcp] skipping {}: no auth at {} ({e})",
+                        server_cfg.name,
+                        auth_path.display()
+                    );
+                    continue;
+                }
             }
         };
-
-        let client = UpstreamClient::new(server_cfg.upstream.clone(), auth);
         let filter = ToolFilter::new(&server_cfg.allow_tools, &server_cfg.deny_tools);
 
         eprintln!(

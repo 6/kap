@@ -51,6 +51,20 @@ impl UpstreamClient {
         }
     }
 
+    /// Create a client with a simple static Bearer token (no refresh).
+    pub fn with_static_token(upstream_url: String, token: String) -> Self {
+        let auth = StoredAuth {
+            upstream: upstream_url.clone(),
+            client_id: String::new(),
+            client_secret: None,
+            access_token: token,
+            refresh_token: None,
+            token_endpoint: String::new(),
+            expires_at: None,
+        };
+        Self::new(upstream_url, auth)
+    }
+
     /// Forward a JSON-RPC request body to the upstream and return the response body.
     pub async fn forward(&self, body: &[u8]) -> Result<(u16, Vec<u8>)> {
         self.ensure_valid_token().await?;
@@ -64,7 +78,7 @@ impl UpstreamClient {
             .http
             .post(&self.upstream_url)
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
+            .header("Accept", "application/json")
             .bearer_auth(&token)
             .body(body.to_vec());
 
