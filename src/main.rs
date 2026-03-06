@@ -1,6 +1,7 @@
 mod check;
 mod config;
 mod init;
+mod init_env;
 mod mcp;
 mod proxy;
 
@@ -47,6 +48,12 @@ enum Command {
         #[arg(long, default_value = "/var/log/devg/proxy.jsonl")]
         log: String,
     },
+    /// Generate .devcontainer/.env with host credentials (for initializeCommand)
+    InitEnv {
+        /// Project directory containing .devcontainer/
+        #[arg(short, long, default_value = ".")]
+        project_dir: String,
+    },
     /// Authenticate with a remote MCP server (OAuth 2.1)
     Auth {
         /// Name for this MCP server (used in config and token storage)
@@ -81,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::Init { project_dir } => init::run(&project_dir),
+        Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Check { proxy } => check::run(proxy).await,
         Command::WhyDenied { tail, log } => proxy::log::why_denied(&log, tail).await,
         Command::Auth {

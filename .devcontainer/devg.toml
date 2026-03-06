@@ -17,6 +17,10 @@ allow = [
   # AI
   "anthropic.com",
   "*.anthropic.com",
+  "claude.ai",
+  "*.claude.ai",
+  "claude.com",
+  "*.claude.com",
   "openai.com",
   "*.openai.com",
   "generativelanguage.googleapis.com",

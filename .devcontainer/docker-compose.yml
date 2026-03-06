@@ -9,7 +9,8 @@ services:
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
       - target-cache:/workspaces/devcontainer-guard/target
-      - /run/host-services/ssh-auth.sock:/ssh-agent
+      # 1Password SSH agent (macOS). Falls back to Docker Desktop SSH agent.
+      - ${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:
       SSH_AUTH_SOCK: /ssh-agent
       HTTP_PROXY: http://proxy:3128
@@ -32,8 +33,9 @@ services:
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
       - proxy-logs:/var/log/devg
-    environment:
-      CONTEXT7_API_KEY: ${CONTEXT7_API_KEY:-}
+    env_file:
+      - path: .env
+        required: false
     networks:
       sandbox:
       external:

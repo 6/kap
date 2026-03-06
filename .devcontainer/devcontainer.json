@@ -3,6 +3,7 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/devcontainer-guard",
+  "initializeCommand": "devg init-env",
   "postCreateCommand": ".devcontainer/setup.sh",
   "remoteUser": "vscode",
   "customizations": {

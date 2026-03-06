@@ -56,6 +56,10 @@ const DEFAULT_DOMAINS: &[&str] = &[
     // AI
     "anthropic.com",
     "*.anthropic.com",
+    "claude.ai",
+    "*.claude.ai",
+    "claude.com",
+    "*.claude.com",
     "openai.com",
     "*.openai.com",
     "generativelanguage.googleapis.com",
@@ -125,8 +129,8 @@ fn generate_docker_compose(project_name: &str) -> String {
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     volumes:
       - ..:/workspaces/{project_name}:cached
-      # Docker Desktop SSH agent (macOS/Windows). On Linux, use $SSH_AUTH_SOCK instead.
-      - /run/host-services/ssh-auth.sock:/ssh-agent
+      # 1Password SSH agent (macOS). On Linux, use $SSH_AUTH_SOCK instead.
+      - ${{HOME}}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:
       SSH_AUTH_SOCK: /ssh-agent
       HTTP_PROXY: http://proxy:3128
@@ -146,6 +150,9 @@ fn generate_docker_compose(project_name: &str) -> String {
     image: ghcr.io/6/devg:latest
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
+    env_file:
+      - path: .env
+        required: false
     networks:
       sandbox:
       external:
@@ -172,6 +179,7 @@ fn generate_devcontainer_json(project_name: &str) -> String {
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/{project_name}",
+  "initializeCommand": "devg init-env",
   "remoteUser": "vscode"
 }}
 "#

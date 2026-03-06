@@ -5,3 +5,6 @@ target/
 
 # rustfmt backup files
 **/*.rs.bk
+
+# Generated credentials (from init-host.sh)
+.devcontainer/.env
