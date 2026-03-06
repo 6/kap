@@ -14,10 +14,6 @@ pub struct Config {
 pub struct ProxyConfig {
     #[serde(default = "default_proxy_listen")]
     pub listen: String,
-    #[serde(default = "default_dns_listen")]
-    pub dns_listen: String,
-    #[serde(default = "default_dns_upstream")]
-    pub dns_upstream: String,
     #[serde(default)]
     pub network: NetworkConfig,
     #[serde(default)]
@@ -77,8 +73,6 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             listen: default_proxy_listen(),
-            dns_listen: default_dns_listen(),
-            dns_upstream: default_dns_upstream(),
             network: NetworkConfig::default(),
             observe: ObserveConfig::default(),
         }
@@ -113,14 +107,6 @@ impl Default for GitHubCredentialConfig {
 
 fn default_proxy_listen() -> String {
     "0.0.0.0:3128".to_string()
-}
-
-fn default_dns_listen() -> String {
-    "0.0.0.0:53".to_string()
-}
-
-fn default_dns_upstream() -> String {
-    "8.8.8.8:53".to_string()
 }
 
 fn default_observe_log() -> String {
@@ -158,8 +144,6 @@ mod tests {
         let toml = r#"
 [proxy]
 listen = "0.0.0.0:9999"
-dns_listen = "0.0.0.0:5353"
-dns_upstream = "1.1.1.1:53"
 
 [proxy.network]
 allow = ["github.com", "crates.io", "custom.com"]
@@ -177,8 +161,6 @@ hosts = ["github.com", "github.example.com"]
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.proxy.listen, "0.0.0.0:9999");
-        assert_eq!(config.proxy.dns_listen, "0.0.0.0:5353");
-        assert_eq!(config.proxy.dns_upstream, "1.1.1.1:53");
         assert_eq!(
             config.proxy.network.allow,
             vec!["github.com", "crates.io", "custom.com"]
@@ -193,8 +175,6 @@ hosts = ["github.com", "github.example.com"]
     fn parse_empty_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
-        assert_eq!(config.proxy.dns_listen, "0.0.0.0:53");
-        assert_eq!(config.proxy.dns_upstream, "8.8.8.8:53");
         assert!(config.proxy.network.allow.is_empty());
         assert!(config.proxy.network.deny.is_empty());
         assert_eq!(config.credentials.socket, "/devp-sockets/cred.sock");

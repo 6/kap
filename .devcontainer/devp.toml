@@ -1,10 +1,5 @@
 # devp.toml — proxy and credential configuration for dogfooding devp itself
 
-[proxy]
-listen = "0.0.0.0:3128"
-dns_listen = "0.0.0.0:53"
-dns_upstream = "8.8.8.8:53"
-
 [proxy.network]
 allow = [
   # GitHub

@@ -56,25 +56,24 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain — no need 
 │  ┌──────────────┐    │    ┌──────────────────┐       │
 │  │ App container │────┼───│ Proxy sidecar    │──► Internet
 │  │  (isolated)   │    │   │  devp proxy      │       │
-│  │  HTTP_PROXY ──┼────┘   │  DNS forwarder   │       │
-│  │  DNS ─────────┼───────►│  domain allowlist │       │
+│  │  HTTP_PROXY ──┼────┘   │  domain allowlist │       │
 │  └──────────────┘         └──────────────────┘       │
 └──────────────────────────────────────────────────────┘
 ```
 
 - The app container has **no external network route** — all traffic goes through the proxy sidecar
-- DNS queries are filtered: denied domains get NXDOMAIN
+- Blocked requests get a 403 with a clear error message naming the denied domain
 - Git credentials flow through `devp credential` → Unix socket → `devp cred-server` → `gh auth token`
 
 ## Commands
 
 | Command | Where it runs | Purpose |
 |---------|--------------|---------|
-| `devp proxy` | Proxy sidecar | HTTP/HTTPS forward proxy + DNS forwarder |
+| `devp proxy` | Proxy sidecar | HTTP/HTTPS forward proxy with domain allowlist |
 | `devp cred-server` | Host | Serves git credentials over Unix socket |
 | `devp credential` | App container | Git credential helper (talks to cred-server) |
-| `devp init` | Anywhere | Scaffolds `.devcontainer/` files |
-| `devp check` | App container | Verifies proxy, DNS, cred-server, git config |
+| `devp init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
+| `devp check` | Proxy sidecar | Verifies proxy, cred-server, git config |
 | `devp why-denied` | App container | Shows denied requests from the proxy log |
 
 ## Development

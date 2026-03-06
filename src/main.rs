@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the forward proxy with domain allowlist and DNS forwarder
+    /// Start the forward proxy with domain allowlist
     Proxy {
         /// Run in observe mode: allow all traffic, log every domain
         #[arg(long)]
@@ -59,7 +59,7 @@ enum Command {
         #[arg(short, long, default_value = ".")]
         project_dir: String,
     },
-    /// Verify setup: proxy reachable, cred-server running, DNS working
+    /// Verify setup: proxy reachable, cred-server running
     Check {
         /// Only check proxy health (for container healthcheck)
         #[arg(long)]

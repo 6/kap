@@ -1,5 +1,4 @@
 pub mod allowlist;
-pub mod dns;
 pub mod log;
 
 use std::sync::Arc;
@@ -38,17 +37,6 @@ pub async fn run(config: Config, observe: bool) -> Result<()> {
     });
 
     let listen_addr = &config.proxy.listen;
-    let dns_listen = config.proxy.dns_listen.clone();
-    let dns_upstream = config.proxy.dns_upstream.clone();
-
-    // Start DNS forwarder in background
-    let dns_allowlist = Arc::new(Allowlist::new(allow_domains, deny_domains));
-    tokio::spawn(async move {
-        if let Err(e) = dns::run(&dns_listen, &dns_upstream, dns_allowlist).await {
-            eprintln!("[dns] fatal: {e}");
-        }
-    });
-
     let listener = TcpListener::bind(listen_addr).await?;
     eprintln!("[proxy] listening on {listen_addr}");
     if observe {
@@ -255,7 +243,6 @@ mod tests {
 
         let mut config = Config::default();
         config.proxy.listen = format!("127.0.0.1:{port}");
-        config.proxy.dns_listen = "127.0.0.1:0".to_string();
         config.proxy.network.allow = allow.iter().map(|s| s.to_string()).collect();
         config.proxy.network.deny = deny.iter().map(|s| s.to_string()).collect();
         config.proxy.observe.log = "/dev/null".to_string();

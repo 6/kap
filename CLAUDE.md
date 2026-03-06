@@ -15,7 +15,7 @@ cargo run -- --help  # CLI help
 
 Single Rust binary, three roles:
 
-- **`devp proxy`** — HTTP/HTTPS forward proxy + DNS forwarder (runs in proxy sidecar container)
+- **`devp proxy`** — HTTP/HTTPS forward proxy (runs in proxy sidecar container)
 - **`devp cred-server`** — git credential server over Unix socket (runs on host)
 - **`devp credential`** — git credential helper client (runs in app container)
 
@@ -27,12 +27,11 @@ Docker Compose with an internal network ensures the app container has no externa
 - `src/config.rs` — TOML config parsing (allow/deny domain lists)
 - `src/proxy/mod.rs` — HTTP/HTTPS forward proxy (hyper + tokio)
 - `src/proxy/allowlist.rs` — wildcard domain matching, deny-overrides-allow
-- `src/proxy/dns.rs` — UDP DNS forwarder with domain filtering
 - `src/proxy/log.rs` — structured JSONL logging + `why-denied` reader
 - `src/cred_server.rs` — host-side Unix socket credential server
 - `src/credential.rs` — container-side git credential helper
-- `src/init.rs` — scaffolds `.devcontainer/` files, detects project language
-- `src/check.rs` — health checks (proxy, DNS, cred-server, git config)
+- `src/init.rs` — scaffolds `.devcontainer/` files (3 files: devp.toml, docker-compose.yml, devcontainer.json)
+- `src/check.rs` — health checks (proxy, cred-server, git config)
 
 ## Security model
 
