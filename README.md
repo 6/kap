@@ -14,7 +14,7 @@ For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside
 ## Quick start
 
 ```bash
-cargo install --path .
+cargo install devcontainer-guard
 
 cd path/to/your/project
 devg init
