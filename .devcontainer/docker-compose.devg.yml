@@ -1,5 +1,6 @@
 # devg overlay: adds network isolation, DNS filtering, and MCP proxy.
 # Merged with docker-compose.yml via dockerComposeFile array in devcontainer.json.
+# This file MUST be last in the array so its settings take precedence.
 services:
   # Adds proxy env vars and DNS to the app service
   app:

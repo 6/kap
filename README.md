@@ -15,16 +15,30 @@ For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside
 
 ```bash
 cargo install devcontainer-guard --version 0.0.1-pre1
+```
 
+**Existing devcontainer** (most common):
+
+```bash
 cd path/to/your/project
 devg init
+```
 
-# Review and adjust the config
+This creates `devg.toml` (domain allowlist) and `docker-compose.devg.yml` (proxy sidecar overlay). It reads your existing `devcontainer.json` and tells you what to add:
+
+```json
+"dockerComposeFile": ["compose.yaml", "docker-compose.devg.yml"],
+"initializeCommand": "devg init-env"
+```
+
+The overlay must be **last** in the array so its network settings take precedence. Then edit the allowlist and start:
+
+```bash
 $EDITOR .devcontainer/devg.toml
-
-# Open in VS Code or start with the CLI
 devcontainer up --workspace-folder .
 ```
+
+**New project** (no devcontainer yet): `devg init` creates everything from scratch, no manual edits needed.
 
 ## Domain allowlist
 
