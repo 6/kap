@@ -1,4 +1,5 @@
 services:
+  # Development container: isolated on internal network, all traffic through proxy
   app:
     build:
       context: ..
@@ -10,16 +11,18 @@ services:
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
       - target-cache:/workspaces/devcontainer-guard/target
-      # 1Password SSH agent (macOS). Falls back to Docker Desktop SSH agent.
+      # 1Password SSH agent (macOS). On Linux, use $SSH_AUTH_SOCK instead.
       - ${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:
       SSH_AUTH_SOCK: /ssh-agent
+      # Use static IP because app DNS goes through devg (hostnames won't resolve)
       HTTP_PROXY: http://172.28.0.3:3128
       HTTPS_PROXY: http://172.28.0.3:3128
       http_proxy: http://172.28.0.3:3128
       https_proxy: http://172.28.0.3:3128
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
+    # DNS goes through devg's filtered forwarder (only resolves allowed domains)
     dns:
       - 172.28.0.3
     command: sleep infinity
@@ -30,6 +33,7 @@ services:
       proxy:
         condition: service_healthy
 
+  # Proxy sidecar: domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129)
   proxy:
     build:
       context: ..
@@ -38,13 +42,14 @@ services:
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
       - proxy-logs:/var/log/devg
+    # Credentials from devg init-env (GH_TOKEN, API keys, etc.)
     env_file:
       - path: .env
         required: false
     networks:
       sandbox:
         ipv4_address: 172.28.0.3
-      external:
+      external:  # proxy has internet access, app does not
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "devg", "check", "--proxy"]
@@ -59,9 +64,13 @@ volumes:
   cargo-git:
   target-cache:
 
+# Static subnet so we can use fixed IPs for DNS and proxy references.
+# The app container's DNS is pointed at the proxy sidecar (172.28.0.3),
+# which means hostnames like "proxy" can't resolve. We use IPs instead.
+# This subnet is internal to Docker, not your host network.
 networks:
   sandbox:
-    internal: true
+    internal: true  # no default gateway, no route to internet
     ipam:
       config:
         - subnet: 172.28.0.0/24

@@ -167,6 +167,9 @@ fn generate_docker_compose(project_name: &str) -> String {
       timeout: 2s
       retries: 10
 
+# Static subnet so we can use fixed IPs for DNS and proxy references.
+# The app container's DNS points at the proxy (172.28.0.3), so hostnames
+# can't resolve. We use IPs instead. Internal to Docker, not your host.
 networks:
   sandbox:
     internal: true
