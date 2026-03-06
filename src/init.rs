@@ -133,10 +133,10 @@ fn generate_docker_compose(project_name: &str) -> String {
       - ${{HOME}}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:
       SSH_AUTH_SOCK: /ssh-agent
-      HTTP_PROXY: http://proxy:3128
-      HTTPS_PROXY: http://proxy:3128
-      http_proxy: http://proxy:3128
-      https_proxy: http://proxy:3128
+      HTTP_PROXY: http://172.28.0.3:3128
+      HTTPS_PROXY: http://172.28.0.3:3128
+      http_proxy: http://172.28.0.3:3128
+      https_proxy: http://172.28.0.3:3128
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
     dns:

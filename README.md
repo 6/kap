@@ -61,7 +61,7 @@ allow_tools = ["get_pull_request", "list_issues", "search_code"]
 deny_tools = ["create_repository", "delete_repository"]
 ```
 
-The agent connects to `http://proxy:3129/github` instead of the real server. devg forwards requests with the configured auth and filters `tools/list` and `tools/call`.
+The agent connects to `http://172.28.0.3:3129/github` instead of the real server. devg forwards requests with the configured auth and filters `tools/list` and `tools/call`.
 
 Three auth modes:
 
