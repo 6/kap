@@ -1,8 +1,8 @@
 {
-  "name": "devcontainer-egress-proxy",
+  "name": "devcontainer-guard",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
-  "workspaceFolder": "/workspaces/devcontainer-egress-proxy",
+  "workspaceFolder": "/workspaces/devcontainer-guard",
   "postCreateCommand": ".devcontainer/setup.sh",
   "remoteUser": "vscode",
   "customizations": {

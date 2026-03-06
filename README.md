@@ -1,9 +1,9 @@
-# devcontainer-egress-proxy
+# devcontainer-guard
 
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-devcontainer-egress-proxy (`devp`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with two layers:
+devcontainer-guard (`devg`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with two layers:
 
 1. **Domain proxy** -- allowlist of domains the container can talk to
 2. **MCP proxy** -- allowlist of MCP tools an agent can call, with credential isolation
@@ -16,10 +16,10 @@ For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside
 cargo install --path .
 
 # Scaffold devcontainer files into your project
-devp init --project-dir /path/to/your/project
+devg init --project-dir /path/to/your/project
 
 # Review and adjust the config
-$EDITOR /path/to/your/project/.devcontainer/devp.toml
+$EDITOR /path/to/your/project/.devcontainer/devg.toml
 
 # Open in VS Code or start with the CLI
 devcontainer up --workspace-folder /path/to/your/project
@@ -27,7 +27,7 @@ devcontainer up --workspace-folder /path/to/your/project
 
 ## Domain allowlist
 
-The config is a flat domain allowlist in `devp.toml`. `devp init` generates a starting list with safe defaults for common ecosystems (GitHub, npm, PyPI, RubyGems, crates.io, Maven, CocoaPods, Go, APT, and AI providers).
+The config is a flat domain allowlist in `devg.toml`. `devg init` generates a starting list with safe defaults for common ecosystems (GitHub, npm, PyPI, RubyGems, crates.io, Maven, CocoaPods, Go, APT, and AI providers).
 
 ```toml
 [proxy.network]
@@ -60,7 +60,7 @@ allow_tools = ["get_pull_request", "list_issues", "search_code"]
 deny_tools = ["create_repository", "delete_repository"]
 ```
 
-The agent connects to `http://proxy:3129/github` instead of the real server. devp forwards requests with the configured auth and filters `tools/list` and `tools/call`.
+The agent connects to `http://proxy:3129/github` instead of the real server. devg forwards requests with the configured auth and filters `tools/list` and `tools/call`.
 
 Three auth modes:
 
@@ -71,8 +71,8 @@ token_env = "GH_TOKEN"
 # 2. Custom headers (${VAR} expanded from env)
 headers = { "X-Api-Key" = "${MY_KEY}" }
 
-# 3. OAuth 2.1 (run once on the host, tokens stored in ~/.devp/auth/)
-# devp auth github --upstream https://mcp.github.com
+# 3. OAuth 2.1 (run once on host, tokens stored in ~/.devg/auth/)
+# devg auth github --upstream https://mcp.github.com
 ```
 
 ## Architecture
@@ -103,11 +103,11 @@ headers = { "X-Api-Key" = "${MY_KEY}" }
 
 | Command | Where it runs | Purpose |
 |---------|--------------|---------|
-| `devp proxy` | Proxy sidecar | Domain proxy + MCP proxy (if `[mcp]` in config) |
-| `devp auth <name> --upstream <url>` | Host | OAuth 2.1 setup for an MCP server |
-| `devp init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
-| `devp check` | Proxy sidecar | Proxy health check (used by Docker healthcheck) |
-| `devp why-denied` | App container | Shows denied requests from the proxy log |
+| `devg proxy` | Proxy sidecar | Domain proxy + MCP proxy (if `[mcp]` in config) |
+| `devg auth <name> --upstream <url>` | Host | OAuth 2.1 setup for an MCP server |
+| `devg init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
+| `devg check` | Proxy sidecar | Proxy health check (used by Docker healthcheck) |
+| `devg why-denied` | App container | Shows denied requests from the proxy log |
 
 ## Development
 
@@ -118,7 +118,7 @@ cargo test           # run all tests
 cargo clippy         # lint
 ```
 
-This repo includes a `.devcontainer/` that dogfoods devp itself. It builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
+This repo includes a `.devcontainer/` that dogfoods devg itself. It builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
 
 ```bash
 devcontainer up --workspace-folder .

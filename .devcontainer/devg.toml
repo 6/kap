@@ -1,4 +1,4 @@
-# devp.toml — egress proxy configuration for dogfooding devp itself
+# devg.toml — devcontainer-guard configuration for dogfooding
 
 [proxy.network]
 allow = [
@@ -25,4 +25,4 @@ allow = [
 # deny = ["gist.github.com"]
 
 [proxy.observe]
-log = "/var/log/devp/proxy.jsonl"
+log = "/var/log/devg/proxy.jsonl"

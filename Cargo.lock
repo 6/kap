@@ -220,7 +220,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "devcontainer-egress-proxy"
+name = "devcontainer-guard"
 version = "0.1.0"
 dependencies = [
  "anyhow",

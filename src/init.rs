@@ -22,7 +22,7 @@ pub fn run(project_dir: &str) -> Result<()> {
         .unwrap_or_else(|| "my-project".to_string());
 
     write_file(
-        &devcontainer_dir.join("devp.toml"),
+        &devcontainer_dir.join("devg.toml"),
         &generate_config(DEFAULT_DOMAINS),
     )?;
     write_file(
@@ -35,12 +35,12 @@ pub fn run(project_dir: &str) -> Result<()> {
     )?;
 
     println!("Created .devcontainer/ with:");
-    println!("  devp.toml            - proxy config (edit allowed domains here)");
+    println!("  devg.toml            - guard config (edit allowed domains here)");
     println!("  docker-compose.yml   - container orchestration");
     println!("  devcontainer.json    - VS Code / devcontainer config");
     println!();
     println!("Next steps:");
-    println!("  1. Review devp.toml and adjust allowed domains");
+    println!("  1. Review devg.toml and adjust allowed domains");
     println!("  2. Run: devcontainer up --workspace-folder .");
 
     Ok(())
@@ -106,7 +106,7 @@ fn generate_config(domains: &[&str]) -> String {
         .join(",\n");
 
     format!(
-        r#"# devp.toml — egress proxy configuration
+        r#"# devg.toml — devcontainer-guard configuration
 
 [proxy.network]
 allow = [
@@ -143,15 +143,15 @@ fn generate_docker_compose(project_name: &str) -> String {
         condition: service_healthy
 
   proxy:
-    image: ghcr.io/6/devp:latest
+    image: ghcr.io/6/devg:latest
     volumes:
-      - ./devp.toml:/etc/devp/config.toml:ro
+      - ./devg.toml:/etc/devg/config.toml:ro
     networks:
       sandbox:
       external:
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "devp", "check", "--proxy"]
+      test: ["CMD", "devg", "check", "--proxy"]
       interval: 2s
       timeout: 2s
       retries: 10
@@ -206,11 +206,11 @@ mod tests {
         let dir = tempdir("scaffold");
         run(dir.to_str().unwrap()).unwrap();
         let dc = dir.join(".devcontainer");
-        assert!(dc.join("devp.toml").exists());
+        assert!(dc.join("devg.toml").exists());
         assert!(dc.join("docker-compose.yml").exists());
         assert!(dc.join("devcontainer.json").exists());
 
-        let config = fs::read_to_string(dc.join("devp.toml")).unwrap();
+        let config = fs::read_to_string(dc.join("devg.toml")).unwrap();
         assert!(config.contains("allow ="));
 
         let compose = fs::read_to_string(dc.join("docker-compose.yml")).unwrap();
@@ -229,7 +229,7 @@ mod tests {
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("devp-test-{}-{suffix}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("devg-test-{}-{suffix}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

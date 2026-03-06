@@ -111,7 +111,7 @@ async fn handle_connect(
         return Ok(Response::builder()
             .status(403)
             .body(Full::new(Bytes::from(format!(
-                "Denied by devp: {domain} is not in the allowlist\n"
+                "Denied by devg: {domain} is not in the allowlist\n"
             ))))
             .unwrap());
     }
@@ -167,7 +167,7 @@ async fn handle_http(
         return Ok(Response::builder()
             .status(403)
             .body(Full::new(Bytes::from(format!(
-                "Denied by devp: {host} is not in the allowlist\n"
+                "Denied by devg: {host} is not in the allowlist\n"
             ))))
             .unwrap());
     }

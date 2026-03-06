@@ -4,11 +4,11 @@ services:
       context: ..
       dockerfile: .devcontainer/Dockerfile
     volumes:
-      - ..:/workspaces/devcontainer-egress-proxy:cached
+      - ..:/workspaces/devcontainer-guard:cached
       - history:/commandhistory
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
-      - target-cache:/workspaces/devcontainer-egress-proxy/target
+      - target-cache:/workspaces/devcontainer-guard/target
       - /run/host-services/ssh-auth.sock:/ssh-agent
     environment:
       SSH_AUTH_SOCK: /ssh-agent
@@ -30,14 +30,14 @@ services:
       context: ..
       dockerfile: .devcontainer/Dockerfile.proxy
     volumes:
-      - ./devp.toml:/etc/devp/config.toml:ro
-      - proxy-logs:/var/log/devp
+      - ./devg.toml:/etc/devg/config.toml:ro
+      - proxy-logs:/var/log/devg
     networks:
       sandbox:
       external:
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "devp", "check", "--proxy"]
+      test: ["CMD", "devg", "check", "--proxy"]
       interval: 2s
       timeout: 2s
       retries: 10

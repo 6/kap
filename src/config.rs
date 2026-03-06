@@ -103,11 +103,11 @@ fn default_mcp_listen() -> String {
 }
 
 fn default_mcp_auth_dir() -> String {
-    "/etc/devp/auth".to_string()
+    "/etc/devg/auth".to_string()
 }
 
 fn default_observe_log() -> String {
-    "/var/log/devp/proxy.jsonl".to_string()
+    "/var/log/devg/proxy.jsonl".to_string()
 }
 
 #[cfg(test)]

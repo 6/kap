@@ -1,6 +1,6 @@
-# devcontainer-egress-proxy
+# devcontainer-guard
 
-Egress proxy for devcontainers. Binary name: `devp`.
+Network and MCP access control for devcontainers. Binary name: `devg`.
 
 ## Commands
 
@@ -29,8 +29,8 @@ Single Rust binary with two proxy layers:
 - `src/mcp/filter.rs` — tool name allow/deny (reuses allowlist pattern)
 - `src/mcp/jsonrpc.rs` — JSON-RPC 2.0 types, tools/list filtering, tools/call gating
 - `src/mcp/upstream.rs` — HTTPS client to upstream MCP servers, token injection + refresh
-- `src/mcp/auth.rs` — `devp auth` command: OAuth 2.1 (metadata discovery, dynamic client registration, PKCE, browser callback)
-- `src/init.rs` — scaffolds `.devcontainer/` files (3 files: devp.toml, docker-compose.yml, devcontainer.json)
+- `src/mcp/auth.rs` — `devg auth` command: OAuth 2.1 (metadata discovery, dynamic client registration, PKCE, browser callback)
+- `src/init.rs` — scaffolds `.devcontainer/` files (3 files: devg.toml, docker-compose.yml, devcontainer.json)
 - `src/check.rs` — proxy health check (for Docker healthcheck)
 
 ## Security model

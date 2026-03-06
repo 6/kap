@@ -1,12 +1,12 @@
 [package]
-name = "devcontainer-egress-proxy"
+name = "devcontainer-guard"
 version = "0.1.0"
 edition = "2024"
-description = "Egress proxy for devcontainers"
+description = "Network and MCP access control for devcontainers"
 license = "MIT"
 
 [[bin]]
-name = "devp"
+name = "devg"
 path = "src/main.rs"
 
 [dependencies]

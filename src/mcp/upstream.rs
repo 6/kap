@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn stored_auth_load_from_file() {
-        let dir = std::env::temp_dir().join(format!("devp-auth-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("devg-auth-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.json");
 

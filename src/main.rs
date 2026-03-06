@@ -7,7 +7,7 @@ mod proxy;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "devp", version, about = "Egress proxy for devcontainers")]
+#[command(name = "devg", version, about = "Network and MCP access control for devcontainers")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -22,7 +22,7 @@ enum Command {
         observe: bool,
 
         /// Path to config file
-        #[arg(short, long, default_value = "/etc/devp/config.toml")]
+        #[arg(short, long, default_value = "/etc/devg/config.toml")]
         config: String,
     },
     /// Scaffold devcontainer files into a project
@@ -44,7 +44,7 @@ enum Command {
         tail: bool,
 
         /// Path to the proxy log
-        #[arg(long, default_value = "/var/log/devp/proxy.jsonl")]
+        #[arg(long, default_value = "/var/log/devg/proxy.jsonl")]
         log: String,
     },
     /// Authenticate with a remote MCP server (OAuth 2.1)

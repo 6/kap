@@ -51,7 +51,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
             })
             .collect();
 
-        // token_env takes priority, then auth file from `devp auth`, then headers-only
+        // token_env takes priority, then auth file from `devg auth`, then headers-only
         let has_headers = !headers.is_empty();
         let client = if let Some(ref env_var) = server_cfg.token_env {
             match std::env::var(env_var) {
@@ -184,7 +184,7 @@ async fn handle_tools_call(
         let resp = jsonrpc::Response::error(
             rpc_req.id.clone(),
             -32602,
-            format!("Tool '{tool_name}' denied by devp MCP filter"),
+            format!("Tool '{tool_name}' denied by devg MCP filter"),
         );
         return Ok(json_response(200, &resp));
     }

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Smoke test for proxy enforcement inside the devcontainer.
-# Run this from the app container to verify the egress proxy works.
+# Run this from the app container to verify devcontainer-guard works.
 set -euo pipefail
 
 PASS=0
@@ -9,7 +9,7 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-echo "=== devp smoke tests ==="
+echo "=== devg smoke tests ==="
 echo ""
 
 # --- Test 1: Allowed HTTPS domain ---
@@ -39,7 +39,7 @@ fi
 
 # --- Test 4: cargo fetch works through proxy ---
 echo "[4] cargo fetch through proxy"
-if cargo fetch --manifest-path /workspaces/devcontainer-egress-proxy/Cargo.toml 2>&1 | tail -1; then
+if cargo fetch --manifest-path /workspaces/devcontainer-guard/Cargo.toml 2>&1 | tail -1; then
   pass "cargo fetch succeeded through proxy"
 else
   fail "cargo fetch failed"
