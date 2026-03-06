@@ -3,7 +3,7 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-devcontainer-egress-proxy (`devp`) locks down what an AI coding agent (or any process) can access from inside a devcontainer. It's a proxy sidecar with a domain allowlist — the container can only reach the internet through the proxy.
+devcontainer-egress-proxy (`devp`) controls which domains a devcontainer can reach. It's a proxy sidecar with a domain allowlist, useful for limiting what an AI coding agent (or any process) can talk to.
 
 For HTTPS, the proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). Granularity is at the domain level: `api.github.com` and `gist.github.com` can be independently allowed or denied.
 
@@ -40,7 +40,7 @@ allow = [
 deny = ["gist.github.com"]
 ```
 
-Wildcards (`*.github.com`) match subdomains but not the bare domain — no need to list both `*.anthropic.com` and `api.anthropic.com`. Deny rules always win.
+Wildcards (`*.github.com`) match subdomains but not the bare domain, so no need to list both `*.anthropic.com` and `api.anthropic.com`. Deny rules always win.
 
 ## Architecture
 
@@ -56,8 +56,8 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain — no need 
 └──────────────────────────────────────────────────┘
 ```
 
-- The app container has **no external network route** — all traffic goes through the proxy sidecar
-- Blocked requests get a 403 with a clear error message naming the denied domain
+- The app container has **no external network route**. All traffic goes through the proxy sidecar.
+- Blocked requests get a 403 with a clear error message naming the denied domain.
 
 ## Commands
 
@@ -77,7 +77,7 @@ cargo test           # run all tests
 cargo clippy         # lint
 ```
 
-This repo includes a `.devcontainer/` that dogfoods devp itself — it builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
+This repo includes a `.devcontainer/` that dogfoods devp itself. It builds from source and runs with GitHub, Rust, APT, and AI domains allowed. Open it in VS Code or run:
 
 ```bash
 devcontainer up --workspace-folder .
