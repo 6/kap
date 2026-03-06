@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.1.1)"
+        description: "Version to release (e.g. 0.1.0 or 0.1.0-pre1)"
         required: true
         type: string
 
@@ -18,36 +18,45 @@ jobs:
   prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-tags: true
 
-      - name: Validate version
+      - name: Validate and normalize version
+        id: version
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Invalid version format. Use semver like 0.1.1"
+          INPUT="${{ inputs.version }}"
+          if ! echo "$INPUT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Invalid version format. Use semver like 0.1.0 or 0.1.0-pre1"
             exit 1
           fi
-          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
-            echo "::error::Tag v${{ inputs.version }} already exists"
+          TAG="v${INPUT}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists"
             exit 1
           fi
-          current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          if [ "$current" = "${{ inputs.version }}" ]; then
-            echo "::error::Cargo.toml already at version ${{ inputs.version }}"
-            exit 1
+          if echo "$INPUT" | grep -q '-'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "version=${INPUT}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Bump version and tag
         run: |
-          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+          sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml
           cargo update -p devcontainer-guard
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
-          git commit -m "Release v${{ inputs.version }}"
-          git tag "v${{ inputs.version }}"
+          git commit -m "Release ${{ steps.version.outputs.tag }}"
+          git tag "${{ steps.version.outputs.tag }}"
           git push origin main --tags
 
   build:
@@ -64,6 +73,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             cross: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04
             cross: true
@@ -72,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: jdx/mise-action@v2
 
@@ -83,6 +95,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install cross
         if: matrix.cross
@@ -108,13 +124,13 @@ jobs:
           path: devg-${{ matrix.target }}.tar.gz
 
   release:
-    needs: build
+    needs: [build, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -122,18 +138,23 @@ jobs:
           merge-multiple: true
 
       - name: Create GitHub release
-        run: gh release create "v${{ inputs.version }}" devg-*.tar.gz --generate-notes
+        run: |
+          FLAGS="--generate-notes"
+          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+            FLAGS="$FLAGS --prerelease"
+          fi
+          gh release create "${{ needs.prepare.outputs.tag }}" devg-*.tar.gz $FLAGS
         env:
           GH_TOKEN: ${{ github.token }}
 
   publish:
-    needs: build
+    needs: [build, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: jdx/mise-action@v2
 
