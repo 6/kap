@@ -5,8 +5,8 @@
 
 devcontainer-guard (`devg`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with two layers:
 
-1. **Domain proxy** -- allowlist of domains the container can talk to
-2. **MCP proxy** -- allowlist of MCP tools an agent can call, with credential isolation
+1. **Domain proxy**: allowlist of domains the container can talk to
+2. **MCP proxy**: allowlist of MCP tools an agent can call, with credential isolation
 
 For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). The MCP proxy inspects Streamable HTTP JSON-RPC to filter tools.
 
@@ -98,6 +98,19 @@ headers = { "X-Api-Key" = "${MY_KEY}" }
 - The app container has **no external network route**. All traffic goes through the proxy sidecar.
 - Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
 - Credentials never enter the app container.
+
+## Security model
+
+Network isolation is **kernel-enforced**, not proxy-based. The Docker `internal: true` network has no default gateway, so the app container has no IP route to the outside world. Unsetting `HTTP_PROXY` or making direct TCP connections doesn't bypass it. Packets have nowhere to go. The only reachable host is the proxy sidecar on the internal network.
+
+MCP server domains are intentionally **not** in the domain allowlist. The agent can only reach them through devg's MCP proxy, which enforces tool filtering. Connecting directly would be blocked by the network.
+
+**Known limitations:**
+
+- **Domain fronting**: a CONNECT request to an allowed CDN domain could route to an attacker's backend via SNI/Host manipulation. devg sees the CONNECT domain, not the backend.
+- **DNS exfiltration**: Docker's internal DNS still resolves external names. Data could be encoded in DNS queries (`stolen-data.evil.com`) that reach an attacker's nameserver. Very low bandwidth.
+- **Container escape**: a kernel exploit that breaks out of the container bypasses all isolation. Not specific to devg. Running Docker inside a VM (e.g., Docker Desktop, Firecracker) adds defense-in-depth.
+- **No TLS inspection**: for HTTPS, devg sees `CONNECT domain:443` but cannot inspect request paths, headers, or bodies inside the tunnel. A process with valid credentials for an allowed domain can do anything that domain permits.
 
 ## Commands
 

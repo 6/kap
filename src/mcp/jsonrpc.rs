@@ -113,4 +113,47 @@ mod tests {
         assert!(json.contains("-32602"));
         assert!(json.contains("Tool denied"));
     }
+
+    #[test]
+    fn batch_array_fails_to_parse() {
+        let json = r#"[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]"#;
+        assert!(serde_json::from_str::<Request>(json).is_err());
+    }
+
+    #[test]
+    fn request_with_string_id() {
+        let json = r#"{"jsonrpc":"2.0","id":"abc-123","method":"tools/call","params":{"name":"test"}}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        assert_eq!(req.id, Some(Value::from("abc-123")));
+        assert_eq!(req.method, "tools/call");
+    }
+
+    #[test]
+    fn filter_tools_list_no_tools_key() {
+        let mut result = serde_json::json!({"other": "data"});
+        filter_tools_list(&mut result, |_| false);
+        assert_eq!(result, serde_json::json!({"other": "data"}));
+    }
+
+    #[test]
+    fn filter_tools_list_retains_nameless_tools() {
+        let mut result = serde_json::json!({
+            "tools": [
+                {"name": "read_file", "description": "read"},
+                {"description": "no name field"},
+            ]
+        });
+        filter_tools_list(&mut result, |name| name == "read_file");
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn error_response_with_none_id() {
+        let resp = Response::error(None, -32600, "Invalid request");
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("id").is_none());
+        assert_eq!(parsed["error"]["code"], -32600);
+    }
 }

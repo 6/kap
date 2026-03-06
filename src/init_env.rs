@@ -109,6 +109,20 @@ mod tests {
     }
 
     #[test]
+    fn extract_env_refs_unclosed_brace() {
+        let mut vars = Vec::new();
+        extract_env_refs("${UNCLOSED", &mut vars);
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn extract_env_refs_empty_var_name() {
+        let mut vars = Vec::new();
+        extract_env_refs("${}", &mut vars);
+        assert!(vars.is_empty());
+    }
+
+    #[test]
     fn vars_from_config_reads_toml() {
         let dir = std::env::temp_dir().join(format!("devg-initenv-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

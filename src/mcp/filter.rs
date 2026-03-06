@@ -101,4 +101,27 @@ mod tests {
         assert!(f.is_allowed("anything"));
         assert!(f.is_allowed(""));
     }
+
+    #[test]
+    fn tool_with_special_chars() {
+        let f = ToolFilter::new(&s(&["get/pull_request", "list-issues"]), &[]);
+        assert!(f.is_allowed("get/pull_request"));
+        assert!(f.is_allowed("list-issues"));
+        assert!(!f.is_allowed("get/push_request"));
+    }
+
+    #[test]
+    fn prefix_pattern_no_match_on_empty() {
+        let f = ToolFilter::new(&s(&["read_*"]), &[]);
+        assert!(!f.is_allowed(""));
+        assert!(f.is_allowed("read_file"));
+    }
+
+    #[test]
+    fn deny_exact_with_allow_wildcard() {
+        let f = ToolFilter::new(&s(&["search_*"]), &s(&["search_sensitive"]));
+        assert!(f.is_allowed("search_code"));
+        assert!(f.is_allowed("search_files"));
+        assert!(!f.is_allowed("search_sensitive"));
+    }
 }

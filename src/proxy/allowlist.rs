@@ -130,4 +130,51 @@ mod tests {
         assert!(al.is_allowed("api.github.com"));
         assert!(!al.is_allowed("gist.github.com"));
     }
+
+    #[test]
+    fn bare_star_matches_everything() {
+        let al = allow(&["*"]);
+        assert!(al.is_allowed("anything.com"));
+        assert!(al.is_allowed("deep.sub.domain.example.com"));
+        assert!(al.is_allowed(""));
+    }
+
+    #[test]
+    fn star_without_dot_is_suffix_match() {
+        // "*hub.com" strips the '*' to get suffix "hub.com"
+        let al = allow(&["*hub.com"]);
+        assert!(al.is_allowed("github.com"));
+        assert!(al.is_allowed("hub.com"));
+        assert!(!al.is_allowed("hub.com.attacker.net"));
+    }
+
+    #[test]
+    fn empty_domain_not_matched() {
+        let al = allow(&["github.com", "*.github.com"]);
+        assert!(!al.is_allowed(""));
+
+        // But bare star does match empty
+        let al_star = allow(&["*"]);
+        assert!(al_star.is_allowed(""));
+    }
+
+    #[test]
+    fn trailing_dot_does_not_match() {
+        let al = allow(&["github.com"]);
+        assert!(!al.is_allowed("github.com."));
+    }
+
+    #[test]
+    fn ipv4_literal_match() {
+        let al = allow(&["192.168.1.1"]);
+        assert!(al.is_allowed("192.168.1.1"));
+        assert!(!al.is_allowed("192.168.1.2"));
+    }
+
+    #[test]
+    fn non_standard_port_stripped() {
+        let al = allow(&["example.com"]);
+        assert!(al.is_allowed("example.com:8080"));
+        assert!(al.is_allowed("example.com:3000"));
+    }
 }
