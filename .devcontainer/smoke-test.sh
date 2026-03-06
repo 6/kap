@@ -6,9 +6,11 @@ set -euo pipefail
 PROXY_IP="172.28.0.3"
 PASS=0
 FAIL=0
+SKIP=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+skip() { echo "  SKIP: $1"; SKIP=$((SKIP + 1)); }
 
 echo "=== devg smoke tests ==="
 echo ""
@@ -79,11 +81,35 @@ else
   fail "MCP proxy returned $MCP_STATUS (expected 404)"
 fi
 
+# --- Real MCP test (Context7, requires CONTEXT7_API_KEY on the proxy) ---
+echo ""
+echo "--- MCP end-to-end (Context7) ---"
+
+echo "[8] tools/list through MCP proxy to Context7"
+# The proxy sidecar has CONTEXT7_API_KEY. If the server is configured,
+# we can call tools/list and verify we get real tools back.
+MCP_RESP=$(curl -s --max-time 10 --noproxy '*' \
+  -X POST "http://$PROXY_IP:3129/context7" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || true)
+
+if echo "$MCP_RESP" | grep -q '"tools"'; then
+  TOOL_COUNT=$(echo "$MCP_RESP" | grep -o '"name"' | wc -l | tr -d ' ')
+  pass "Context7 returned $TOOL_COUNT tools via MCP proxy"
+elif echo "$MCP_RESP" | grep -q '"error"'; then
+  # Server responded but no tools (auth issue, etc.)
+  skip "Context7 returned error (CONTEXT7_API_KEY may not be set)"
+elif echo "$MCP_RESP" | grep -q 'unknown MCP server'; then
+  skip "context7 not configured in devg.toml"
+else
+  skip "Context7 not reachable (CONTEXT7_API_KEY may not be set)"
+fi
+
 # --- Cargo fetch (end-to-end: DNS + proxy + TLS) ---
 echo ""
 echo "--- End-to-end ---"
 
-echo "[8] cargo fetch through proxy"
+echo "[9] cargo fetch through proxy"
 if cargo fetch --manifest-path /workspaces/devcontainer-guard/Cargo.toml 2>&1 | tail -1; then
   pass "cargo fetch succeeded (DNS + proxy + TLS all working)"
 else
@@ -92,7 +118,7 @@ fi
 
 # --- Summary ---
 echo ""
-echo "=== Results: $PASS passed, $FAIL failed ==="
+echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
 if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
