@@ -1,4 +1,5 @@
 pub mod allowlist;
+pub mod dns;
 pub mod log;
 
 use std::sync::Arc;
@@ -18,16 +19,12 @@ use allowlist::Allowlist;
 use log::{ProxyLogEntry, ProxyLogger};
 
 struct ProxyState {
-    allowlist: Allowlist,
+    allowlist: Arc<Allowlist>,
     logger: ProxyLogger,
     observe: bool,
 }
 
-pub async fn run(config: Config, observe: bool) -> Result<()> {
-    let allow_domains = config.allow_domains();
-    let deny_domains = &config.proxy.network.deny;
-
-    let allowlist = Allowlist::new(allow_domains, deny_domains);
+pub async fn run(config: Config, observe: bool, allowlist: Arc<Allowlist>) -> Result<()> {
     let logger = ProxyLogger::new(&config.proxy.observe.log);
 
     let state = Arc::new(ProxyState {
@@ -247,8 +244,13 @@ mod tests {
         config.proxy.network.deny = deny.iter().map(|s| s.to_string()).collect();
         config.proxy.observe.log = "/dev/null".to_string();
 
+        let allowlist = Arc::new(Allowlist::new(
+            &config.proxy.network.allow,
+            &config.proxy.network.deny,
+        ));
+
         tokio::spawn(async move {
-            let _ = run(config, observe).await;
+            let _ = run(config, observe, allowlist).await;
         });
 
         for _ in 0..100 {

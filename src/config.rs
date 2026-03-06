@@ -14,6 +14,10 @@ pub struct Config {
 pub struct ProxyConfig {
     #[serde(default = "default_proxy_listen")]
     pub listen: String,
+    #[serde(default = "default_dns_listen")]
+    pub dns_listen: String,
+    #[serde(default = "default_dns_upstream")]
+    pub dns_upstream: String,
     #[serde(default)]
     pub network: NetworkConfig,
     #[serde(default)]
@@ -55,6 +59,8 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             listen: default_proxy_listen(),
+            dns_listen: default_dns_listen(),
+            dns_upstream: default_dns_upstream(),
             network: NetworkConfig::default(),
             observe: ObserveConfig::default(),
         }
@@ -96,6 +102,14 @@ pub struct McpServerConfig {
 
 fn default_proxy_listen() -> String {
     "0.0.0.0:3128".to_string()
+}
+
+fn default_dns_listen() -> String {
+    "0.0.0.0:53".to_string()
+}
+
+fn default_dns_upstream() -> String {
+    "8.8.8.8:53".to_string()
 }
 
 fn default_mcp_listen() -> String {

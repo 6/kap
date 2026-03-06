@@ -5,6 +5,8 @@ mod init_env;
 mod mcp;
 mod proxy;
 
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -76,16 +78,27 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Proxy { observe, config } => {
             let cfg = config::Config::load(&config)?;
-            let proxy_fut = proxy::run(cfg.clone(), observe);
+
+            let allowlist = Arc::new(proxy::allowlist::Allowlist::new(
+                cfg.allow_domains(),
+                &cfg.proxy.network.deny,
+            ));
+
+            let proxy_fut = proxy::run(cfg.clone(), observe, allowlist.clone());
+            let dns_fut = proxy::dns::run(
+                &cfg.proxy.dns_listen,
+                &cfg.proxy.dns_upstream,
+                allowlist,
+            );
 
             if let Some(ref mcp_cfg) = cfg.mcp {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
                 let mcp_fut = mcp::run(mcp_cfg, logger);
-                tokio::try_join!(proxy_fut, mcp_fut)?;
-                Ok(())
+                tokio::try_join!(proxy_fut, dns_fut, mcp_fut)?;
             } else {
-                proxy_fut.await
+                tokio::try_join!(proxy_fut, dns_fut)?;
             }
+            Ok(())
         }
         Command::Init { project_dir } => init::run(&project_dir),
         Command::InitEnv { project_dir } => init_env::run(&project_dir),

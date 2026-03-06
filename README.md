@@ -3,10 +3,11 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-devcontainer-guard (`devg`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with two layers:
+devcontainer-guard (`devg`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with three layers:
 
 1. **Domain proxy**: allowlist of domains the container can talk to
-2. **MCP proxy**: allowlist of MCP tools an agent can call, with credential isolation
+2. **DNS forwarder**: only resolves allowed domains, blocks DNS exfiltration
+3. **MCP proxy**: allowlist of MCP tools an agent can call, with credential isolation
 
 For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). The MCP proxy inspects Streamable HTTP JSON-RPC to filter tools.
 
@@ -86,6 +87,8 @@ headers = { "X-Api-Key" = "${MY_KEY}" }
 │  │  (isolated)   │    │                  │         │
 │  │  HTTP_PROXY ──┼───►│  domain proxy    │──► Internet
 │  │               │    │  :3128           │         │
+│  │  DNS ─────────┼───►│  DNS forwarder   │──► Upstream DNS
+│  │               │    │  :53             │         │
 │  │  MCP servers ─┼───►│  MCP proxy       │──► MCP servers
 │  │  via http://  │    │  :3129           │         │
 │  │  proxy:3129   │    │  (tool filter +  │         │
@@ -96,6 +99,7 @@ headers = { "X-Api-Key" = "${MY_KEY}" }
 ```
 
 - The app container has **no external network route**. All traffic goes through the proxy sidecar.
+- DNS queries only resolve allowed domains. Disallowed domains get NXDOMAIN.
 - Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
 - Credentials never enter the app container.
 
@@ -108,7 +112,6 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 **Known limitations:**
 
 - **Domain fronting**: a CONNECT request to an allowed CDN domain could route to an attacker's backend via SNI/Host manipulation. devg sees the CONNECT domain, not the backend.
-- **DNS exfiltration**: Docker's internal DNS still resolves external names. Data could be encoded in DNS queries (`stolen-data.evil.com`) that reach an attacker's nameserver. Very low bandwidth.
 - **Container escape**: a kernel exploit that breaks out of the container bypasses all isolation. Not specific to devg. Running Docker inside a VM (e.g., Docker Desktop, Firecracker) adds defense-in-depth.
 - **No TLS inspection**: for HTTPS, devg sees `CONNECT domain:443` but cannot inspect request paths, headers, or bodies inside the tunnel. A process with valid credentials for an allowed domain can do anything that domain permits.
 

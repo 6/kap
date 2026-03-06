@@ -139,9 +139,12 @@ fn generate_docker_compose(project_name: &str) -> String {
       https_proxy: http://proxy:3128
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
+    dns:
+      - 172.28.0.3
     command: sleep infinity
     networks:
       sandbox:
+        ipv4_address: 172.28.0.2
     depends_on:
       proxy:
         condition: service_healthy
@@ -155,6 +158,7 @@ fn generate_docker_compose(project_name: &str) -> String {
         required: false
     networks:
       sandbox:
+        ipv4_address: 172.28.0.3
       external:
     restart: unless-stopped
     healthcheck:
@@ -166,6 +170,9 @@ fn generate_docker_compose(project_name: &str) -> String {
 networks:
   sandbox:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   external:
     driver: bridge
 "#
