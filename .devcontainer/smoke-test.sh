@@ -1,6 +1,10 @@
 #!/bin/bash
 # Smoke test for devcontainer-guard enforcement.
 # Run this from the app container to verify all three layers work.
+#
+# Pre-flight (run on host before starting the devcontainer):
+#   gh auth status          # ensure GitHub CLI is authenticated
+#   devg init-env           # generates .env with GH_TOKEN + API keys
 set -euo pipefail
 
 PROXY_IP="172.28.0.3"

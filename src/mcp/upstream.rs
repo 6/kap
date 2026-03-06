@@ -94,7 +94,7 @@ impl UpstreamClient {
             .http
             .post(&self.upstream_url)
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
+            .header("Accept", "application/json, text/event-stream")
             .body(body.to_vec());
 
         if !token.is_empty() {

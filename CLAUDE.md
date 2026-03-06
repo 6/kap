@@ -35,6 +35,12 @@ Single Rust binary with three enforcement layers:
 - `src/init.rs`:scaffolds `.devcontainer/` files (3 files: devg.toml, docker-compose.yml, devcontainer.json)
 - `src/check.rs`:proxy health check (for Docker healthcheck)
 
+## Testing policy
+
+Every code change must include unit tests. Run `cargo test` before committing.
+
+Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all three layers (domain proxy, DNS forwarder, MCP proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
+
 ## Security model
 
 The domain proxy is a domain-level gate (not a request-level firewall). For HTTPS, it sees `CONNECT domain:443` but cannot inspect inside the TLS tunnel. No MITM.

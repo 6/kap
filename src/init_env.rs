@@ -151,6 +151,41 @@ mod tests {
     }
 
     #[test]
+    fn load_env_file_parses_key_value() {
+        let dir = std::env::temp_dir().join(format!("devg-loadenv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "FOO=bar\nBAZ=qux\n").unwrap();
+
+        let map = load_env_file(&path);
+        assert_eq!(map["FOO"], "bar");
+        assert_eq!(map["BAZ"], "qux");
+        assert_eq!(map.len(), 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_env_file_skips_comments_and_blanks() {
+        let dir = std::env::temp_dir().join(format!("devg-loadenv2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "# comment\n\nKEY=val\n  \n# another\n").unwrap();
+
+        let map = load_env_file(&path);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["KEY"], "val");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_env_file_missing_returns_empty() {
+        let map = load_env_file(Path::new("/nonexistent/.env"));
+        assert!(map.is_empty());
+    }
+
+    #[test]
     fn vars_from_config_reads_toml() {
         let dir = std::env::temp_dir().join(format!("devg-initenv-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
