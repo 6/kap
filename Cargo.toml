@@ -2,7 +2,7 @@
 name = "devcontainer-egress-proxy"
 version = "0.1.0"
 edition = "2024"
-description = "Egress proxy + credential isolation for devcontainers"
+description = "Egress proxy for devcontainers"
 license = "MIT"
 
 [[bin]]
@@ -13,7 +13,6 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 hyper = { version = "1", features = ["http1", "server", "client"] }
-libc = "0.2"
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }
 http-body-util = "0.1"
 bytes = "1"

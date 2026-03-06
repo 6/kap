@@ -9,15 +9,15 @@ services:
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
       - target-cache:/workspaces/devcontainer-egress-proxy/target
-      - ${HOME}/.devp-sockets:/devp-sockets:ro
+      - /run/host-services/ssh-auth.sock:/ssh-agent
     environment:
+      SSH_AUTH_SOCK: /ssh-agent
       HTTP_PROXY: http://proxy:3128
       HTTPS_PROXY: http://proxy:3128
       http_proxy: http://proxy:3128
       https_proxy: http://proxy:3128
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
-      GIT_CONFIG_GLOBAL: /home/vscode/.gitconfig-devp
     command: sleep infinity
     networks:
       sandbox:

@@ -1,9 +1,6 @@
 # devcontainer-egress-proxy
 
-devcontainer-egress-proxy (`devp`) locks down what an AI coding agent (or any process) can access from inside a devcontainer. Two layers:
-
-- **Proxy** — domain allowlist enforced by an internal Docker network. The container can only reach the internet through the proxy sidecar.
-- **Credential broker** — git tokens served over a Unix socket via the git credential protocol. Tokens stay on the host, never exposed as env vars in the container.
+devcontainer-egress-proxy (`devp`) locks down what an AI coding agent (or any process) can access from inside a devcontainer. It's a proxy sidecar with a domain allowlist — the container can only reach the internet through the proxy.
 
 For HTTPS, the proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). Granularity is at the domain level: `api.github.com` and `gist.github.com` can be independently allowed or denied.
 
@@ -45,35 +42,27 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain — no need 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ Host                                                │
-│   devp cred-server ──► ~/.devp-sockets/cred.sock    │
-└─────────────────────┬───────────────────────────────┘
-                      │ (socket mount, read-only)
-┌─────────────────────┼───────────────────────────────┐
-│ Internal network     │                               │
-│                      │                               │
-│  ┌──────────────┐    │    ┌──────────────────┐       │
-│  │ App container │────┼───│ Proxy sidecar    │──► Internet
-│  │  (isolated)   │    │   │  devp proxy      │       │
-│  │  HTTP_PROXY ──┼────┘   │  domain allowlist │       │
-│  └──────────────┘         └──────────────────┘       │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│ Internal network                                  │
+│                                                   │
+│  ┌──────────────┐    ┌──────────────────┐         │
+│  │ App container │────│ Proxy sidecar    │──► Internet
+│  │  (isolated)   │    │  devp proxy      │         │
+│  │  HTTP_PROXY ──┼───►│  domain allowlist │         │
+│  └──────────────┘    └──────────────────┘         │
+└──────────────────────────────────────────────────┘
 ```
 
 - The app container has **no external network route** — all traffic goes through the proxy sidecar
 - Blocked requests get a 403 with a clear error message naming the denied domain
-- Git credentials flow through `devp credential` → Unix socket → `devp cred-server` → `gh auth token`
 
 ## Commands
 
 | Command | Where it runs | Purpose |
 |---------|--------------|---------|
 | `devp proxy` | Proxy sidecar | HTTP/HTTPS forward proxy with domain allowlist |
-| `devp cred-server` | Host | Serves git credentials over Unix socket |
-| `devp credential` | App container | Git credential helper (talks to cred-server) |
 | `devp init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
-| `devp check` | Proxy sidecar | Verifies proxy, cred-server, git config |
+| `devp check` | Proxy sidecar | Proxy health check (used by Docker healthcheck) |
 | `devp why-denied` | App container | Shows denied requests from the proxy log |
 
 ## Development

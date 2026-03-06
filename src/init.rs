@@ -106,7 +106,7 @@ fn generate_config(domains: &[&str]) -> String {
         .join(",\n");
 
     format!(
-        r#"# devp.toml — proxy and credential configuration
+        r#"# devp.toml — egress proxy configuration
 
 [proxy.network]
 allow = [
@@ -114,9 +114,6 @@ allow = [
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
-
-[credentials.github]
-hosts = ["github.com"]
 "#
     )
 }
@@ -128,8 +125,10 @@ fn generate_docker_compose(project_name: &str) -> String {
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     volumes:
       - ..:/workspaces/{project_name}:cached
-      - ${{HOME}}/.devp-sockets:/devp-sockets:ro
+      # Docker Desktop SSH agent (macOS/Windows). On Linux, use $SSH_AUTH_SOCK instead.
+      - /run/host-services/ssh-auth.sock:/ssh-agent
     environment:
+      SSH_AUTH_SOCK: /ssh-agent
       HTTP_PROXY: http://proxy:3128
       HTTPS_PROXY: http://proxy:3128
       http_proxy: http://proxy:3128
@@ -173,8 +172,6 @@ fn generate_devcontainer_json(project_name: &str) -> String {
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/{project_name}",
-  "initializeCommand": "devp cred-server --daemonize",
-  "postCreateCommand": "devp credential --install",
   "remoteUser": "vscode"
 }}
 "#
