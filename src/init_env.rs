@@ -17,13 +17,22 @@ pub fn run(project_dir: &str) -> Result<()> {
         Vec::new()
     };
 
+    // Load existing .env so we don't overwrite manually set values
+    let existing = load_env_file(&env_path);
+
     let mut lines: Vec<String> = Vec::new();
 
     for var in &needed_vars {
+        // Keep existing value if present
+        if let Some(val) = existing.get(var.as_str()) {
+            lines.push(format!("{var}={val}"));
+            continue;
+        }
+        // Otherwise try host environment
         if let Ok(val) = std::env::var(var)
             && !val.is_empty()
         {
-            eprintln!("[init-env] {var}");
+            eprintln!("[init-env] {var} (from host env)");
             lines.push(format!("{var}={val}"));
         }
     }
@@ -32,11 +41,30 @@ pub fn run(project_dir: &str) -> Result<()> {
     if !content.is_empty() {
         std::fs::write(&env_path, content + "\n")?;
         eprintln!("[init-env] wrote {} vars to {}", lines.len(), env_path.display());
-    } else {
+    } else if !env_path.exists() {
+        // Only create empty file if none exists
         std::fs::write(&env_path, "")?;
     }
 
     Ok(())
+}
+
+/// Load existing KEY=VALUE pairs from a .env file.
+fn load_env_file(path: &Path) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return map;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once('=') {
+            map.insert(key.trim().to_string(), val.trim().to_string());
+        }
+    }
+    map
 }
 
 /// Parse devg.toml and collect all env var names referenced by MCP server configs.
