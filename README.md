@@ -3,9 +3,12 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-devcontainer-egress-proxy (`devp`) controls which domains a devcontainer can reach. It's a proxy sidecar with a domain allowlist, useful for limiting what an AI coding agent (or any process) can talk to.
+devcontainer-egress-proxy (`devp`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with two layers:
 
-For HTTPS, the proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). Granularity is at the domain level: `api.github.com` and `gist.github.com` can be independently allowed or denied.
+1. **Domain proxy** -- allowlist of domains the container can talk to
+2. **MCP proxy** -- allowlist of MCP tools an agent can call, with credential isolation
+
+For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). The MCP proxy inspects Streamable HTTP JSON-RPC to filter tools.
 
 ## Quick start
 
@@ -22,7 +25,7 @@ $EDITOR /path/to/your/project/.devcontainer/devp.toml
 devcontainer up --workspace-folder /path/to/your/project
 ```
 
-## Configuration
+## Domain allowlist
 
 The config is a flat domain allowlist in `devp.toml`. `devp init` generates a starting list with safe defaults for common ecosystems (GitHub, npm, PyPI, RubyGems, crates.io, Maven, CocoaPods, Go, APT, and AI providers).
 
@@ -40,7 +43,37 @@ allow = [
 deny = ["gist.github.com"]
 ```
 
-Wildcards (`*.github.com`) match subdomains but not the bare domain, so no need to list both `*.anthropic.com` and `api.anthropic.com`. Deny rules always win.
+Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win.
+
+## MCP proxy
+
+The MCP proxy sits between the agent and remote MCP servers. It controls which tools the agent can call and keeps credentials (OAuth tokens, API keys) out of the app container.
+
+```toml
+[mcp]
+
+[[mcp.servers]]
+name = "github"
+upstream = "https://mcp.github.com"
+token_env = "GH_TOKEN"
+allow_tools = ["get_pull_request", "list_issues", "search_code"]
+deny_tools = ["create_repository", "delete_repository"]
+```
+
+The agent connects to `http://proxy:3129/github` instead of the real server. devp forwards requests with the configured auth and filters `tools/list` and `tools/call`.
+
+Three auth modes:
+
+```toml
+# 1. Bearer token from env var
+token_env = "GH_TOKEN"
+
+# 2. Custom headers (${VAR} expanded from env)
+headers = { "X-Api-Key" = "${MY_KEY}" }
+
+# 3. OAuth 2.1 (run once on the host, tokens stored in ~/.devp/auth/)
+# devp auth github --upstream https://mcp.github.com
+```
 
 ## Architecture
 
@@ -49,21 +82,29 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain, so no need 
 │ Internal network                                  │
 │                                                   │
 │  ┌──────────────┐    ┌──────────────────┐         │
-│  │ App container │────│ Proxy sidecar    │──► Internet
-│  │  (isolated)   │    │  devp proxy      │         │
-│  │  HTTP_PROXY ──┼───►│  domain allowlist │         │
+│  │ App container │    │ Proxy sidecar    │         │
+│  │  (isolated)   │    │                  │         │
+│  │  HTTP_PROXY ──┼───►│  domain proxy    │──► Internet
+│  │               │    │  :3128           │         │
+│  │  MCP servers ─┼───►│  MCP proxy       │──► MCP servers
+│  │  via http://  │    │  :3129           │         │
+│  │  proxy:3129   │    │  (tool filter +  │         │
+│  │               │    │   credential     │         │
+│  │  (no tokens)  │    │   injection)     │         │
 │  └──────────────┘    └──────────────────┘         │
 └──────────────────────────────────────────────────┘
 ```
 
 - The app container has **no external network route**. All traffic goes through the proxy sidecar.
-- Blocked requests get a 403 with a clear error message naming the denied domain.
+- Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
+- Credentials never enter the app container.
 
 ## Commands
 
 | Command | Where it runs | Purpose |
 |---------|--------------|---------|
-| `devp proxy` | Proxy sidecar | HTTP/HTTPS forward proxy with domain allowlist |
+| `devp proxy` | Proxy sidecar | Domain proxy + MCP proxy (if `[mcp]` in config) |
+| `devp auth <name> --upstream <url>` | Host | OAuth 2.1 setup for an MCP server |
 | `devp init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
 | `devp check` | Proxy sidecar | Proxy health check (used by Docker healthcheck) |
 | `devp why-denied` | App container | Shows denied requests from the proxy log |
