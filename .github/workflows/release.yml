@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Validate version
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format. Use semver like 0.1.1"
+            exit 1
+          fi
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+          current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "$current" = "${{ inputs.version }}" ]; then
+            echo "::error::Cargo.toml already at version ${{ inputs.version }}"
+            exit 1
+          fi
+
+      - name: Bump version and tag
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+          cargo update -p devcontainer-guard
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Release v${{ inputs.version }}"
+          git tag "v${{ inputs.version }}"
+          git push origin main --tags
+
+  build:
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-26
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-26
+            cross: false
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04
+            cross: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: jdx/mise-action@v2
+
+      - name: Add Rust target
+        if: "!matrix.cross"
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build with cargo
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build with cross
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package tarball
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../devg-${{ matrix.target }}.tar.gz devg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devg-${{ matrix.target }}
+          path: devg-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: devg-*
+          merge-multiple: true
+
+      - name: Create GitHub release
+        run: gh release create "v${{ inputs.version }}" devg-*.tar.gz --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: jdx/mise-action@v2
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

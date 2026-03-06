@@ -1,5 +1,4 @@
 name: Checks
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,14 +13,16 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-24.04, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - uses: jdx/mise-action@v2
+
+      - name: Install Rust components
+        if: matrix.os == 'ubuntu-24.04'
+        run: rustup component add rustfmt clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -31,10 +32,10 @@ jobs:
 
       - name: Clippy
         if: matrix.os == 'ubuntu-24.04'
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --release -- -D warnings
 
       - name: Build
-        run: cargo build
+        run: cargo build --release
 
       - name: Test
-        run: cargo test
+        run: cargo test --release
