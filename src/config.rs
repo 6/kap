@@ -2,13 +2,14 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
+    pub mcp: Option<McpConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
     #[serde(default = "default_proxy_listen")]
     pub listen: String,
@@ -18,7 +19,7 @@ pub struct ProxyConfig {
     pub observe: ObserveConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub allow: Vec<String>,
@@ -26,7 +27,7 @@ pub struct NetworkConfig {
     pub deny: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ObserveConfig {
     #[serde(default = "default_observe_log")]
     pub log: String,
@@ -67,8 +68,36 @@ impl Default for ObserveConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct McpConfig {
+    #[serde(default = "default_mcp_listen")]
+    pub listen: String,
+    #[serde(default = "default_mcp_auth_dir")]
+    pub auth_dir: String,
+    #[serde(default)]
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub upstream: String,
+    #[serde(default)]
+    pub allow_tools: Vec<String>,
+    #[serde(default)]
+    pub deny_tools: Vec<String>,
+}
+
 fn default_proxy_listen() -> String {
     "0.0.0.0:3128".to_string()
+}
+
+fn default_mcp_listen() -> String {
+    "0.0.0.0:3129".to_string()
+}
+
+fn default_mcp_auth_dir() -> String {
+    "/etc/devp/auth".to_string()
 }
 
 fn default_observe_log() -> String {
@@ -121,5 +150,43 @@ allow = ["github.com", "custom.com"]
         assert_eq!(domains.len(), 2);
         assert_eq!(domains[0], "github.com");
         assert_eq!(domains[1], "custom.com");
+    }
+
+    #[test]
+    fn parse_mcp_config() {
+        let toml = r#"
+[mcp]
+listen = "0.0.0.0:4000"
+auth_dir = "/tmp/auth"
+
+[[mcp.servers]]
+name = "github"
+upstream = "https://mcp.github.com"
+allow_tools = ["get_pull_request", "list_issues"]
+deny_tools = ["create_repository"]
+
+[[mcp.servers]]
+name = "filesystem"
+upstream = "https://mcp.example.com/fs"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let mcp = config.mcp.unwrap();
+        assert_eq!(mcp.listen, "0.0.0.0:4000");
+        assert_eq!(mcp.auth_dir, "/tmp/auth");
+        assert_eq!(mcp.servers.len(), 2);
+
+        assert_eq!(mcp.servers[0].name, "github");
+        assert_eq!(mcp.servers[0].upstream, "https://mcp.github.com");
+        assert_eq!(mcp.servers[0].allow_tools, vec!["get_pull_request", "list_issues"]);
+        assert_eq!(mcp.servers[0].deny_tools, vec!["create_repository"]);
+
+        assert_eq!(mcp.servers[1].name, "filesystem");
+        assert!(mcp.servers[1].allow_tools.is_empty());
+    }
+
+    #[test]
+    fn no_mcp_config_is_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.mcp.is_none());
     }
 }
