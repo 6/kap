@@ -36,12 +36,28 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
     let mut servers = HashMap::new();
 
     for server_cfg in &config.servers {
-        // token_env takes priority, then auth file from `devp auth`
+        // Expand ${VAR} in header values from env
+        let headers: Vec<(String, String)> = server_cfg
+            .headers
+            .iter()
+            .filter_map(|(k, v)| {
+                let expanded = expand_env(v);
+                if expanded.is_empty() {
+                    eprintln!("[mcp] {}: skipping header {k} (empty after env expansion)", server_cfg.name);
+                    None
+                } else {
+                    Some((k.clone(), expanded))
+                }
+            })
+            .collect();
+
+        // token_env takes priority, then auth file from `devp auth`, then headers-only
+        let has_headers = !headers.is_empty();
         let client = if let Some(ref env_var) = server_cfg.token_env {
             match std::env::var(env_var) {
                 Ok(token) if !token.is_empty() => {
                     eprintln!("[mcp] {} using token from ${env_var}", server_cfg.name);
-                    UpstreamClient::with_static_token(server_cfg.upstream.clone(), token)
+                    UpstreamClient::with_static_token(server_cfg.upstream.clone(), token, headers)
                 }
                 _ => {
                     eprintln!(
@@ -55,7 +71,11 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
             let auth_path =
                 Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
             match StoredAuth::load(&auth_path) {
-                Ok(auth) => UpstreamClient::new(server_cfg.upstream.clone(), auth),
+                Ok(auth) => UpstreamClient::new(server_cfg.upstream.clone(), auth, headers),
+                Err(e) if has_headers => {
+                    eprintln!("[mcp] {} using headers only (no OAuth)", server_cfg.name);
+                    UpstreamClient::with_headers_only(server_cfg.upstream.clone(), headers)
+                }
                 Err(e) => {
                     eprintln!(
                         "[mcp] skipping {}: no auth at {} ({e})",
@@ -250,6 +270,20 @@ fn raw_response(status: u16, body: &[u8]) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
+/// Expand ${VAR} references in a string from environment variables.
+fn expand_env(s: &str) -> String {
+    let mut result = s.to_string();
+    while let Some(start) = result.find("${") {
+        let Some(end) = result[start..].find('}') else {
+            break;
+        };
+        let var_name = &result[start + 2..start + end];
+        let value = std::env::var(var_name).unwrap_or_default();
+        result = format!("{}{value}{}", &result[..start], &result[start + end + 1..]);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,7 +385,7 @@ mod tests {
             expires_at: None,
         };
 
-        let client = UpstreamClient::new(format!("http://127.0.0.1:{upstream_port}"), auth);
+        let client = UpstreamClient::new(format!("http://127.0.0.1:{upstream_port}"), auth, vec![]);
         let filter_obj = ToolFilter::new(
             &allow_tools.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             &deny_tools.iter().map(|s| s.to_string()).collect::<Vec<_>>(),

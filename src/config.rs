@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -84,6 +85,9 @@ pub struct McpServerConfig {
     pub upstream: String,
     /// Env var to use as Bearer token (e.g., "GH_TOKEN"). Skips OAuth auth file.
     pub token_env: Option<String>,
+    /// Extra headers to send upstream. Values with ${VAR} are expanded from env.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
     #[serde(default)]
     pub allow_tools: Vec<String>,
     #[serde(default)]

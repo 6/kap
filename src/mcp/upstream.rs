@@ -39,20 +39,22 @@ pub struct UpstreamClient {
     http: reqwest::Client,
     auth: Mutex<StoredAuth>,
     session_id: Mutex<Option<String>>,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl UpstreamClient {
-    pub fn new(upstream_url: String, auth: StoredAuth) -> Self {
+    pub fn new(upstream_url: String, auth: StoredAuth, extra_headers: Vec<(String, String)>) -> Self {
         Self {
             upstream_url,
             http: reqwest::Client::new(),
             auth: Mutex::new(auth),
             session_id: Mutex::new(None),
+            extra_headers,
         }
     }
 
     /// Create a client with a simple static Bearer token (no refresh).
-    pub fn with_static_token(upstream_url: String, token: String) -> Self {
+    pub fn with_static_token(upstream_url: String, token: String, extra_headers: Vec<(String, String)>) -> Self {
         let auth = StoredAuth {
             upstream: upstream_url.clone(),
             client_id: String::new(),
@@ -62,7 +64,21 @@ impl UpstreamClient {
             token_endpoint: String::new(),
             expires_at: None,
         };
-        Self::new(upstream_url, auth)
+        Self::new(upstream_url, auth, extra_headers)
+    }
+
+    /// Create a client with only extra headers (no Bearer token).
+    pub fn with_headers_only(upstream_url: String, extra_headers: Vec<(String, String)>) -> Self {
+        let auth = StoredAuth {
+            upstream: upstream_url.clone(),
+            client_id: String::new(),
+            client_secret: None,
+            access_token: String::new(),
+            refresh_token: None,
+            token_endpoint: String::new(),
+            expires_at: None,
+        };
+        Self::new(upstream_url, auth, extra_headers)
     }
 
     /// Forward a JSON-RPC request body to the upstream and return the response body.
@@ -79,8 +95,15 @@ impl UpstreamClient {
             .post(&self.upstream_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .bearer_auth(&token)
             .body(body.to_vec());
+
+        if !token.is_empty() {
+            req = req.bearer_auth(&token);
+        }
+
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
 
         if let Some(ref sid) = session_id {
             req = req.header("Mcp-Session-Id", sid);
