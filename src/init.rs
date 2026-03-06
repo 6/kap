@@ -39,11 +39,16 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
         .unwrap_or("app")
         .to_string();
 
-    let compose_file = dc_json["dockerComposeFile"]
-        .as_str()
-        .or_else(|| dc_json["dockerComposeFile"].as_array()?.first()?.as_str())
-        .unwrap_or("docker-compose.yml")
-        .to_string();
+    // Build the dockerComposeFile array for the instructions
+    let compose_files: Vec<String> = if let Some(arr) = dc_json["dockerComposeFile"].as_array() {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    } else if let Some(s) = dc_json["dockerComposeFile"].as_str() {
+        vec![s.to_string()]
+    } else {
+        vec!["docker-compose.yml".to_string()]
+    };
 
     let devg_toml_path = devcontainer_dir.join("devg.toml");
     let overlay_path = devcontainer_dir.join("docker-compose.devg.yml");
@@ -58,14 +63,20 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     write_file(&devg_toml_path, &generate_config(DEFAULT_DOMAINS))?;
     write_file(&overlay_path, &generate_overlay(&service_name))?;
 
-    println!("Created:");
-    println!("  .devcontainer/devg.toml                - guard config (edit allowed domains here)");
-    println!("  .devcontainer/docker-compose.devg.yml   - proxy sidecar overlay");
+    // Build the new dockerComposeFile value for display
+    let mut all_compose: Vec<String> = compose_files;
+    all_compose.push("docker-compose.devg.yml".to_string());
+    let compose_json: Vec<String> = all_compose.iter().map(|f| format!("\"{f}\"")).collect();
+    let compose_value = format!("[{}]", compose_json.join(", "));
+
     println!();
-    println!("Add to your devcontainer.json:");
+    println!("Created .devcontainer/devg.toml");
+    println!("Created .devcontainer/docker-compose.devg.yml");
     println!();
-    println!("  \"dockerComposeFile\": [\"{compose_file}\", \"docker-compose.devg.yml\"],");
-    println!("  \"initializeCommand\": \"devg init-env\",");
+    println!(">>> Add these to .devcontainer/devcontainer.json:");
+    println!();
+    println!("  \"dockerComposeFile\": {compose_value},");
+    println!("  \"initializeCommand\": \"devg init-env\"");
     println!();
     println!("Then: devcontainer up --workspace-folder .");
 
