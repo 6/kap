@@ -16,14 +16,14 @@ For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside
 ```bash
 cargo install --path .
 
-# Scaffold devcontainer files into your project
-devg init --project-dir /path/to/your/project
+cd path/to/your/project
+devg init
 
 # Review and adjust the config
-$EDITOR /path/to/your/project/.devcontainer/devg.toml
+$EDITOR .devcontainer/devg.toml
 
 # Open in VS Code or start with the CLI
-devcontainer up --workspace-folder /path/to/your/project
+devcontainer up --workspace-folder .
 ```
 
 ## Domain allowlist

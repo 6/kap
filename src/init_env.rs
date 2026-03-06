@@ -11,11 +11,14 @@ pub fn run(project_dir: &str) -> Result<()> {
     let config_path = project.join(".devcontainer/devg.toml");
     let env_path = project.join(".devcontainer/.env");
 
-    let needed_vars = if config_path.exists() {
-        vars_from_config(&config_path)?
-    } else {
-        Vec::new()
-    };
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No devg.toml found at {}. Run `devg init` first to set up your devcontainer.",
+            config_path.display()
+        );
+    }
+
+    let needed_vars = vars_from_config(&config_path)?;
 
     // Load existing .env so we don't overwrite manually set values
     let existing = load_env_file(&env_path);
