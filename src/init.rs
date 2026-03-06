@@ -21,13 +21,10 @@ pub fn run(project_dir: &str) -> Result<()> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "my-project".to_string());
 
-    // Detect domains for this project
-    let domains = detect_domains(project);
-
     // Write config
     write_file(
         &devcontainer_dir.join("devp.toml"),
-        &generate_config(&domains),
+        &generate_config(DEFAULT_DOMAINS),
     )?;
 
     // Write docker-compose.yml
@@ -68,7 +65,10 @@ pub fn run(project_dir: &str) -> Result<()> {
     println!("  Dockerfile.proxy     - proxy sidecar");
     println!("  setup.sh             - post-create setup (add your toolchains here)");
     println!();
-    println!("Detected {} allowed domains.", domains.len());
+    println!(
+        "Included {} default allowed domains.",
+        DEFAULT_DOMAINS.len()
+    );
     println!();
     println!("Next steps:");
     println!("  1. Review devp.toml and adjust allowed domains");
@@ -78,100 +78,57 @@ pub fn run(project_dir: &str) -> Result<()> {
     Ok(())
 }
 
-// Domain lists for common ecosystems, used to generate allowlists.
-const GITHUB_DOMAINS: &[&str] = &[
+// Default domains included in every generated config.
+// These are all safe package registry / toolchain / AI domains.
+const DEFAULT_DOMAINS: &[&str] = &[
+    // GitHub
     "github.com",
-    "api.github.com",
+    "*.github.com",
     "*.githubusercontent.com",
-    "objects.githubusercontent.com",
-    "raw.githubusercontent.com",
-    "codeload.github.com",
-];
-
-const AI_DOMAINS: &[&str] = &[
-    "api.anthropic.com",
+    // AI
     "anthropic.com",
     "*.anthropic.com",
-    "api.openai.com",
     "openai.com",
     "*.openai.com",
     "generativelanguage.googleapis.com",
-];
-
-const APT_DOMAINS: &[&str] = &[
+    // APT
     "*.ubuntu.com",
     "*.debian.org",
-    "deb.debian.org",
-    "security.debian.org",
-    "archive.ubuntu.com",
-    "security.ubuntu.com",
-];
-
-const RUBY_DOMAINS: &[&str] = &[
+    // Ruby
     "rubygems.org",
     "*.rubygems.org",
     "bundler.io",
     "*.ruby-lang.org",
-    "index.rubygems.org",
-];
-
-const NODE_DOMAINS: &[&str] = &[
-    "registry.npmjs.org",
+    "rubyonrails.org",
+    "*.rubyonrails.org",
+    // Node
     "*.npmjs.org",
     "*.npmjs.com",
     "nodejs.org",
     "*.yarnpkg.com",
-];
-
-const RUST_DOMAINS: &[&str] = &[
+    // Rust
     "crates.io",
     "*.crates.io",
-    "static.crates.io",
     "rustup.rs",
     "*.rust-lang.org",
-    "static.rust-lang.org",
-];
-
-const PYTHON_DOMAINS: &[&str] = &[
+    // Python
     "pypi.org",
     "*.pypi.org",
-    "files.pythonhosted.org",
     "*.pythonhosted.org",
-];
-
-const GO_DOMAINS: &[&str] = &[
+    // Go
     "proxy.golang.org",
     "sum.golang.org",
     "storage.googleapis.com",
+    // Java
+    "repo.maven.apache.org",
+    "*.maven.org",
+    "plugins.gradle.org",
+    "services.gradle.org",
+    "downloads.gradle-dn.com",
+    // CocoaPods
+    "cocoapods.org",
+    "*.cocoapods.org",
 ];
-
-fn detect_domains(project: &Path) -> Vec<&'static str> {
-    let mut domains = Vec::new();
-    domains.extend_from_slice(GITHUB_DOMAINS);
-    domains.extend_from_slice(AI_DOMAINS);
-    domains.extend_from_slice(APT_DOMAINS);
-
-    if project.join("Gemfile").exists() || project.join("Gemfile.lock").exists() {
-        domains.extend_from_slice(RUBY_DOMAINS);
-    }
-    if project.join("package.json").exists() {
-        domains.extend_from_slice(NODE_DOMAINS);
-    }
-    if project.join("Cargo.toml").exists() {
-        domains.extend_from_slice(RUST_DOMAINS);
-    }
-    if project.join("pyproject.toml").exists()
-        || project.join("requirements.txt").exists()
-        || project.join("setup.py").exists()
-    {
-        domains.extend_from_slice(PYTHON_DOMAINS);
-    }
-    if project.join("go.mod").exists() {
-        domains.extend_from_slice(GO_DOMAINS);
-    }
-
-    domains
-}
 
 fn generate_config(domains: &[&str]) -> String {
     let allow_toml = domains
@@ -368,25 +325,17 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn detect_domains_rust_project() {
-        let dir = tempdir("rust");
-        fs::write(dir.join("Cargo.toml"), "").unwrap();
-        let domains = detect_domains(&dir);
+    fn default_domains_covers_all_ecosystems() {
+        let domains = DEFAULT_DOMAINS;
+        assert!(domains.contains(&"github.com"));
+        assert!(domains.contains(&"anthropic.com"));
         assert!(domains.contains(&"crates.io"));
-        assert!(domains.contains(&"github.com"));
-        assert!(domains.contains(&"api.anthropic.com"));
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn detect_domains_empty_project() {
-        let dir = tempdir("empty");
-        let domains = detect_domains(&dir);
-        assert!(domains.contains(&"github.com"));
-        assert!(domains.contains(&"api.anthropic.com"));
-        assert!(!domains.contains(&"crates.io"));
-        assert!(!domains.contains(&"registry.npmjs.org"));
-        fs::remove_dir_all(&dir).unwrap();
+        assert!(domains.contains(&"*.npmjs.org"));
+        assert!(domains.contains(&"pypi.org"));
+        assert!(domains.contains(&"proxy.golang.org"));
+        assert!(domains.contains(&"rubygems.org"));
+        assert!(domains.contains(&"cocoapods.org"));
+        assert!(domains.contains(&"repo.maven.apache.org"));
     }
 
     #[test]

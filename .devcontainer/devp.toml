@@ -9,30 +9,19 @@ dns_upstream = "8.8.8.8:53"
 allow = [
   # GitHub
   "github.com",
-  "api.github.com",
+  "*.github.com",
   "*.githubusercontent.com",
-  "objects.githubusercontent.com",
-  "raw.githubusercontent.com",
-  "codeload.github.com",
   # Rust
   "crates.io",
   "*.crates.io",
-  "static.crates.io",
   "rustup.rs",
   "*.rust-lang.org",
-  "static.rust-lang.org",
   # APT
   "*.ubuntu.com",
   "*.debian.org",
-  "deb.debian.org",
-  "security.debian.org",
-  "archive.ubuntu.com",
-  "security.ubuntu.com",
   # AI
-  "api.anthropic.com",
   "anthropic.com",
   "*.anthropic.com",
-  "api.openai.com",
   "openai.com",
   "*.openai.com",
   "generativelanguage.googleapis.com",

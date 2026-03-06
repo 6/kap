@@ -24,13 +24,13 @@ devcontainer up --workspace-folder /path/to/your/project
 
 ## Configuration
 
-The config is a flat domain allowlist in `devp.toml`. `devp init` detects your project language and generates a starting list.
+The config is a flat domain allowlist in `devp.toml`. `devp init` generates a starting list with safe defaults for common ecosystems (GitHub, npm, PyPI, RubyGems, crates.io, Maven, CocoaPods, Go, APT, and AI providers).
 
 ```toml
 [proxy.network]
 allow = [
   "github.com",
-  "api.github.com",
+  "*.github.com",
   "*.githubusercontent.com",
   "crates.io",
   "*.crates.io",
@@ -40,7 +40,7 @@ allow = [
 deny = ["gist.github.com"]
 ```
 
-Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win.
+Wildcards (`*.github.com`) match subdomains but not the bare domain — no need to list both `*.anthropic.com` and `api.anthropic.com`. Deny rules always win.
 
 ## Architecture
 
@@ -82,7 +82,7 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules 
 ```bash
 cargo check          # fast compile check
 cargo build          # full build
-cargo test           # run all tests (34 tests)
+cargo test           # run all tests
 cargo clippy         # lint
 ```
 
