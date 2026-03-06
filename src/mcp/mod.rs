@@ -565,6 +565,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_method_returns_405() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{proxy_port}/test"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 405);
+    }
+
+    #[tokio::test]
+    async fn empty_path_returns_404() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://127.0.0.1:{proxy_port}/"))
+            .json(&serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_forwarded() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://127.0.0.1:{proxy_port}/test"))
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        // Should forward to upstream (not 400). Upstream returns 200 with default response.
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn tools_call_missing_name_denied_when_not_in_allow() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+
+        // params has no "name" → tool_call_name returns None → name is "unknown"
+        let resp = post_jsonrpc(
+            proxy_port,
+            "test",
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "method": "tools/call",
+                "params": {}
+            }),
+        )
+        .await;
+
+        // "unknown" is not in allow list → denied
+        assert!(resp["error"].is_object());
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn tools_list_deny_only() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        // Empty allow = permit all, deny delete_*
+        let proxy_port = start_mcp_proxy(upstream_port, &[], &["delete_*"]).await;
+
+        let resp = post_jsonrpc(
+            proxy_port,
+            "test",
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await;
+
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["read_file", "write_file", "search_code"]);
+        assert!(!names.contains(&"delete_file"));
+    }
+
+    #[test]
+    fn expand_env_substitutes_variable() {
+        // SAFETY: single-threaded test, no other code reads this var concurrently
+        unsafe { std::env::set_var("DEVG_TEST_TOKEN", "secret123") };
+        assert_eq!(expand_env("Bearer ${DEVG_TEST_TOKEN}"), "Bearer secret123");
+        unsafe { std::env::remove_var("DEVG_TEST_TOKEN") };
+    }
+
+    #[test]
+    fn expand_env_unclosed_brace_no_panic() {
+        let result = expand_env("${UNCLOSED");
+        assert_eq!(result, "${UNCLOSED");
+    }
+
+    #[tokio::test]
     async fn non_tool_methods_forwarded_transparently() {
         let (upstream_port, _handle) = start_mock_upstream().await;
         let proxy_port =

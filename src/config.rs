@@ -225,4 +225,45 @@ upstream = "https://mcp.github.com"
         let mcp = config.mcp.unwrap();
         assert!(mcp.servers[0].token_env.is_none());
     }
+
+    #[test]
+    fn malformed_toml_returns_error() {
+        let result = toml::from_str::<Config>("[proxy\nbroken");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_fields_ignored() {
+        let toml = r#"
+[proxy]
+foo = "bar"
+listen = "0.0.0.0:1234"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.proxy.listen, "0.0.0.0:1234");
+    }
+
+    #[test]
+    fn mcp_headers_parsed() {
+        let toml = r#"
+[mcp]
+
+[[mcp.servers]]
+name = "test"
+upstream = "https://example.com"
+headers = { "X-Api-Key" = "${API_KEY}", "Accept" = "application/json" }
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let mcp = config.mcp.unwrap();
+        assert_eq!(mcp.servers[0].headers.len(), 2);
+        assert_eq!(mcp.servers[0].headers["X-Api-Key"], "${API_KEY}");
+        assert_eq!(mcp.servers[0].headers["Accept"], "application/json");
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_default() {
+        let config = Config::load("/nonexistent/path/devg.toml").unwrap();
+        assert_eq!(config.proxy.listen, "0.0.0.0:3128");
+        assert!(config.mcp.is_none());
+    }
 }

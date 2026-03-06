@@ -353,4 +353,71 @@ mod tests {
             "observe mode should allow all, got: {resp}"
         );
     }
+
+    #[tokio::test]
+    async fn connect_without_port_returns_response() {
+        let port = start_proxy(&["allowed.test"], &[], false).await;
+        let resp = raw_request(
+            port,
+            "CONNECT noport HTTP/1.1\r\nHost: noport\r\n\r\n",
+        )
+        .await;
+        // "noport" is not in the allowlist, so should be denied
+        assert!(resp.contains("403"), "expected 403, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn http_empty_host_denied() {
+        let port = start_proxy(&["allowed.test"], &[], false).await;
+        let resp = raw_request(
+            port,
+            "GET / HTTP/1.1\r\nHost: \r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("403"), "empty host should be denied, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn observe_mode_allows_denied_http() {
+        let port = start_proxy(&[], &[], true).await;
+        // HTTP to a domain with port 1 (closed) — should be allowed through (not 403)
+        let resp = raw_request(
+            port,
+            "GET http://unlisted.test:1/path HTTP/1.1\r\nHost: unlisted.test\r\n\r\n",
+        )
+        .await;
+        assert!(
+            !resp.contains("403"),
+            "observe mode should not deny HTTP, got: {resp}"
+        );
+        // Expect 502 since the upstream is unreachable
+        assert!(resp.contains("502"), "expected 502 Bad Gateway, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn deny_overrides_allow_for_connect() {
+        let port = start_proxy(&["*.example.com"], &["blocked.example.com"], false).await;
+        let resp = raw_request(
+            port,
+            "CONNECT blocked.example.com:443 HTTP/1.1\r\nHost: blocked.example.com:443\r\n\r\n",
+        )
+        .await;
+        assert!(
+            resp.contains("403"),
+            "deny should override allow for CONNECT, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_port_defaults_to_80() {
+        let port = start_proxy(&["127.0.0.1"], &[], false).await;
+        // No port in URI — defaults to 80, which is likely closed → 502
+        let resp = raw_request(
+            port,
+            "GET http://127.0.0.1/test HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+        .await;
+        assert!(!resp.contains("403"), "should not be denied, got: {resp}");
+        assert!(resp.contains("502"), "expected 502 for closed port 80, got: {resp}");
+    }
 }

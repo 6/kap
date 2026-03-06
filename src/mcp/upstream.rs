@@ -245,4 +245,36 @@ mod tests {
         let auth = make_auth(Some("not-a-date"));
         assert!(!auth.is_expired());
     }
+
+    #[test]
+    fn load_nonexistent_file_errors() {
+        let result = StoredAuth::load(std::path::Path::new("/nonexistent/auth.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_invalid_json_errors() {
+        let dir = std::env::temp_dir().join(format!("devg-auth-invalid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.json");
+        std::fs::write(&path, "not json").unwrap();
+
+        let result = StoredAuth::load(&path);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn static_token_never_expires() {
+        let client = UpstreamClient::with_static_token(
+            "https://example.com".to_string(),
+            "my_token".to_string(),
+            vec![],
+        );
+        let auth = client.auth.blocking_lock();
+        assert_eq!(auth.access_token, "my_token");
+        assert!(auth.expires_at.is_none());
+        assert!(!auth.is_expired());
+    }
 }

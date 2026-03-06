@@ -146,4 +146,59 @@ mod tests {
             assert_eq!(entry.method, "GET");
         }
     }
+
+    #[tokio::test]
+    async fn logger_writes_jsonl_to_file() {
+        let dir = std::env::temp_dir().join(format!("devg-log-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+
+        let logger = ProxyLogger::new(path.to_str().unwrap());
+        let entry = ProxyLogEntry::new("example.com", "allowed", "CONNECT");
+        logger.log(&entry).await.unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed["domain"], "example.com");
+        assert_eq!(parsed["action"], "allowed");
+        assert_eq!(parsed["method"], "CONNECT");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn logger_appends_multiple_entries() {
+        let dir = std::env::temp_dir().join(format!("devg-log-append-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+
+        let logger = ProxyLogger::new(path.to_str().unwrap());
+        logger.log(&ProxyLogEntry::new("a.com", "allowed", "GET")).await.unwrap();
+        logger.log(&ProxyLogEntry::new("b.com", "denied", "CONNECT")).await.unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.trim().lines().collect();
+        assert_eq!(lines.len(), 2);
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(first["domain"], "a.com");
+        assert_eq!(second["domain"], "b.com");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn logger_creates_parent_dirs() {
+        let dir = std::env::temp_dir().join(format!("devg-log-mkdir-{}", std::process::id()));
+        let path = dir.join("sub").join("deep").join("log.jsonl");
+        // dir doesn't exist yet
+        assert!(!dir.exists());
+
+        let logger = ProxyLogger::new(path.to_str().unwrap());
+        logger.log(&ProxyLogEntry::new("test.com", "denied", "GET")).await.unwrap();
+
+        assert!(path.exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
