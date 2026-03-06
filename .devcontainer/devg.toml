@@ -24,8 +24,6 @@ allow = [
   "openai.com",
   "*.openai.com",
   "generativelanguage.googleapis.com",
-  # Context7 (MCP server, proxied through devg)
-  "mcp.context7.com",
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
