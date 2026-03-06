@@ -1,6 +1,6 @@
 {
   "name": "devcontainer-guard",
-  "dockerComposeFile": "docker-compose.yml",
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.devg.yml"],
   "service": "app",
   "workspaceFolder": "/workspaces/devcontainer-guard",
   "initializeCommand": "devg init-env",

@@ -1,0 +1,60 @@
+# devg overlay: adds network isolation, DNS filtering, and MCP proxy.
+# Merged with docker-compose.yml via dockerComposeFile array in devcontainer.json.
+services:
+  # Adds proxy env vars and DNS to the app service
+  app:
+    environment:
+      # Use static IP because app DNS goes through devg (hostnames won't resolve)
+      HTTP_PROXY: http://172.28.0.3:3128
+      HTTPS_PROXY: http://172.28.0.3:3128
+      http_proxy: http://172.28.0.3:3128
+      https_proxy: http://172.28.0.3:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    # DNS goes through devg's filtered forwarder (only resolves allowed domains)
+    dns:
+      - 172.28.0.3
+    networks:
+      devg_sandbox:
+        ipv4_address: 172.28.0.2
+    depends_on:
+      devg:
+        condition: service_healthy
+
+  # Proxy sidecar: domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129)
+  devg:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      target: proxy
+    volumes:
+      - ./devg.toml:/etc/devg/config.toml:ro
+      - proxy-logs:/var/log/devg
+    # Credentials from devg init-env (GH_TOKEN, API keys, etc.)
+    env_file:
+      - path: .env
+        required: false
+    networks:
+      devg_sandbox:
+        ipv4_address: 172.28.0.3
+      devg_external:
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "devg", "check", "--proxy"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+volumes:
+  proxy-logs:
+
+# Static subnet so we can use fixed IPs for DNS and proxy references.
+# Internal to Docker, not your host network.
+networks:
+  devg_sandbox:
+    internal: true  # no default gateway, no route to internet
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  devg_external:
+    driver: bridge
