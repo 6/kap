@@ -3,6 +3,7 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
+      target: dev
     volumes:
       - ..:/workspaces/devcontainer-guard:cached
       - history:/commandhistory
@@ -29,7 +30,8 @@ services:
   proxy:
     build:
       context: ..
-      dockerfile: .devcontainer/Dockerfile.proxy
+      dockerfile: .devcontainer/Dockerfile
+      target: proxy
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
       - proxy-logs:/var/log/devg
