@@ -198,8 +198,15 @@ fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
         vec!["docker-compose.yml".to_string()]
     };
 
-    // Write devg.toml
-    write_file(&devg_toml_path, &generate_config(DEFAULT_DOMAINS))?;
+    // Write devg.toml (auto-detects CLI tools like gh)
+    let config_content = generate_config(DEFAULT_DOMAINS);
+    write_file(&devg_toml_path, &config_content)?;
+
+    // Parse back to get detected CLI tools for the overlay
+    let detected_tools: Vec<String> = detect_cli_tools()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
 
     // Generate overlay (using default ComposeConfig — user can customize in devg.toml later)
     let overlay_path = devcontainer_dir.join(OVERLAY_FILENAME);
@@ -207,7 +214,12 @@ fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let subnet_prefix = derive_subnet(project);
     write_file(
         &overlay_path,
-        &generate_overlay(&service_name, &compose_config, &[], &subnet_prefix),
+        &generate_overlay(
+            &service_name,
+            &compose_config,
+            &detected_tools,
+            &subnet_prefix,
+        ),
     )?;
 
     // Update devcontainer.json: add overlay to dockerComposeFile, add initializeCommand
@@ -280,9 +292,13 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     // Generate the overlay so things work immediately
     let compose_config = ComposeConfig::default();
     let subnet_prefix = derive_subnet(project);
+    let detected_tools: Vec<String> = detect_cli_tools()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
     write_file(
         &devcontainer_dir.join(OVERLAY_FILENAME),
-        &generate_overlay("app", &compose_config, &[], &subnet_prefix),
+        &generate_overlay("app", &compose_config, &detected_tools, &subnet_prefix),
     )?;
 
     // Add overlay to .gitignore
@@ -355,12 +371,66 @@ const DEFAULT_DOMAINS: &[&str] = &[
     "*.cocoapods.org",
 ];
 
+struct DetectedTool {
+    name: &'static str,
+    env: &'static [&'static str],
+    allow: &'static [&'static str],
+}
+
+const DETECTABLE_TOOLS: &[DetectedTool] = &[DetectedTool {
+    name: "gh",
+    env: &["GH_TOKEN"],
+    allow: &["*"],
+}];
+
+fn detect_cli_tools() -> Vec<&'static DetectedTool> {
+    DETECTABLE_TOOLS
+        .iter()
+        .filter(|t| {
+            std::process::Command::new("which")
+                .arg(t.name)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .collect()
+}
+
 fn generate_config(domains: &[&str]) -> String {
     let allow_toml = domains
         .iter()
         .map(|d| format!("  \"{d}\""))
         .collect::<Vec<_>>()
         .join(",\n");
+
+    let detected = detect_cli_tools();
+    let cli_section = if detected.is_empty() {
+        String::new()
+    } else {
+        let tools: Vec<String> = detected
+            .iter()
+            .map(|t| {
+                let env = t
+                    .env
+                    .iter()
+                    .map(|e| format!("\"{e}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let allow = t
+                    .allow
+                    .iter()
+                    .map(|a| format!("\"{a}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "\n[[cli.tools]]\nname = \"{}\"\nenv = [{}]\nallow = [{}]",
+                    t.name, env, allow
+                )
+            })
+            .collect();
+        format!("\n[cli]{}\n", tools.join("\n"))
+    };
 
     format!(
         r#"# devg.toml: devcontainer-guard configuration
@@ -371,7 +441,7 @@ allow = [
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
-"#
+{cli_section}"#
     )
 }
 
