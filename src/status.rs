@@ -181,6 +181,47 @@ pub fn run() -> Result<()> {
         }
     }
 
+    // CLI proxy checks
+    if let Some(ref cli) = config.cli
+        && !cli.tools.is_empty()
+    {
+        if exec_exit_code(
+            &app,
+            &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3130")],
+        ) == 0
+        {
+            ok("CLI proxy reachable", &mut pass);
+        } else {
+            bad("CLI proxy not reachable on :3130", &mut fail);
+        }
+
+        // Check each tool's shim is installed
+        for tool in &cli.tools {
+            if exec_exit_code(&app, &["which", &tool.name]) == 0 {
+                ok(&format!("{} shim installed", tool.name), &mut pass);
+            } else {
+                bad(
+                    &format!("{} shim not found in app container", tool.name),
+                    &mut fail,
+                );
+            }
+        }
+
+        // Check env vars are set on sidecar
+        for tool in &cli.tools {
+            for var in &tool.env {
+                if exec_exit_code(&sidecar, &["sh", "-c", &format!("test -n \"${var}\"")]) == 0 {
+                    ok(&format!("${var} set on sidecar"), &mut pass);
+                } else {
+                    bad(
+                        &format!("{}: ${var} not set on sidecar", tool.name),
+                        &mut fail,
+                    );
+                }
+            }
+        }
+    }
+
     // Recent denials (from sidecar proxy log)
     let denied_count = exec_in(
         &sidecar,
@@ -227,6 +268,12 @@ fn print_config_summary(config: &crate::config::Config) {
             println!("    mcp: no servers");
         } else {
             println!("    mcp: {}", names.join(", "));
+        }
+    }
+    if let Some(ref cli) = config.cli {
+        let names: Vec<&str> = cli.tools.iter().map(|t| t.name.as_str()).collect();
+        if !names.is_empty() {
+            println!("    cli: {}", names.join(", "));
         }
     }
     println!();
