@@ -1,7 +1,7 @@
 /// Verify devcontainer-guard is configured correctly.
 ///
-/// Run from the app container to check proxy, DNS, and network isolation.
-use anyhow::Result;
+/// Runs on the host. Finds the running app container and exec's checks into it.
+use anyhow::{Context, Result};
 use std::process::Command;
 
 const PROXY_IP: &str = "172.28.0.3";
@@ -10,86 +10,104 @@ pub fn run() -> Result<()> {
     println!("devg doctor");
     println!();
 
+    let container = find_app_container()?;
+    println!("  container: {container}");
+    println!();
+
     let mut pass = 0;
     let mut fail = 0;
 
     // 1. HTTP_PROXY set correctly
     print!("  HTTP_PROXY ... ");
-    match std::env::var("HTTP_PROXY") {
-        Ok(val) if val.contains(PROXY_IP) => {
+    match exec_in(&container, &["printenv", "HTTP_PROXY"]) {
+        Some(val) if val.contains(PROXY_IP) => {
             println!("ok ({val})");
             pass += 1;
         }
-        Ok(val) => {
-            println!("WRONG ({val}, expected {PROXY_IP})");
+        Some(val) => {
+            println!("WRONG ({val})");
+            println!("         expected {PROXY_IP}, overlay may not be last in dockerComposeFile");
             fail += 1;
         }
-        Err(_) => {
-            println!("NOT SET (expected http://{PROXY_IP}:3128)");
+        None => {
+            println!("NOT SET");
+            println!("         overlay may not be applied");
             fail += 1;
         }
     }
 
     // 2. DNS points at proxy
     print!("  DNS resolver ... ");
-    let resolv = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
-    if resolv.contains(PROXY_IP) {
-        println!("ok (nameserver {PROXY_IP})");
-        pass += 1;
-    } else {
-        println!("WRONG (expected nameserver {PROXY_IP})");
-        println!("         dns: may not be set in docker-compose overlay");
-        fail += 1;
+    match exec_in(&container, &["cat", "/etc/resolv.conf"]) {
+        Some(resolv) if resolv.contains(PROXY_IP) => {
+            println!("ok");
+            pass += 1;
+        }
+        _ => {
+            println!("WRONG (expected nameserver {PROXY_IP})");
+            fail += 1;
+        }
     }
 
-    // 3. Proxy is reachable
+    // 3. Proxy reachable (TCP connect to port 3128)
     print!("  proxy reachable ... ");
-    if tcp_connect(PROXY_IP, 3128) {
-        println!("ok ({PROXY_IP}:3128)");
+    // Use bash to do a /dev/tcp connect since curl to a bare proxy is unreliable
+    let code = exec_exit_code(
+        &container,
+        &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")],
+    );
+    if code == 0 {
+        println!("ok");
         pass += 1;
     } else {
         println!("FAIL (can't reach {PROXY_IP}:3128)");
-        println!("         devg sidecar may not be running");
         fail += 1;
     }
 
     // 4. DNS resolves allowed domain
     print!("  DNS allows github.com ... ");
-    if dns_resolves("github.com") {
-        println!("ok");
-        pass += 1;
-    } else {
-        println!("FAIL (could not resolve)");
-        fail += 1;
+    match exec_in(&container, &["dig", "+short", "+time=3", "github.com"]) {
+        Some(out) if !out.is_empty() => {
+            println!("ok");
+            pass += 1;
+        }
+        _ => {
+            println!("FAIL");
+            fail += 1;
+        }
     }
 
     // 5. DNS blocks disallowed domain
     print!("  DNS blocks evil.test ... ");
-    if !dns_resolves("evil.test") {
-        println!("ok (NXDOMAIN)");
-        pass += 1;
-    } else {
-        println!("FAIL (resolved, should be blocked)");
-        println!("         DNS forwarder may not be active");
-        fail += 1;
+    match exec_in(&container, &["dig", "+short", "+time=3", "evil.test"]) {
+        Some(out) if out.is_empty() => {
+            println!("ok (NXDOMAIN)");
+            pass += 1;
+        }
+        None => {
+            println!("ok (NXDOMAIN)");
+            pass += 1;
+        }
+        _ => {
+            println!("FAIL (resolved, should be blocked)");
+            fail += 1;
+        }
     }
 
     // 6. HTTPS to blocked domain is denied
-    print!("  HTTPS blocked (example.com) ... ");
-    match curl_status("https://example.com") {
-        Some(403) | Some(0) => {
-            println!("ok (blocked)");
-            pass += 1;
-        }
-        Some(code) => {
-            println!("FAIL (got HTTP {code}, expected 403)");
-            println!("         docker-compose.devg.yml may not be last in dockerComposeFile");
-            fail += 1;
-        }
-        None => {
-            println!("ok (connection refused)");
-            pass += 1;
-        }
+    print!("  HTTPS blocked ... ");
+    let http_code = exec_in(
+        &container,
+        &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://example.com"],
+    );
+    let code = http_code.as_deref().unwrap_or("").trim();
+    if code == "403" || code == "000" || code.is_empty() {
+        println!("ok (example.com blocked)");
+        pass += 1;
+    } else {
+        println!("FAIL (got HTTP {code}, expected 403)");
+        println!("         overlay may not be last in dockerComposeFile");
+        fail += 1;
     }
 
     println!();
@@ -97,44 +115,63 @@ pub fn run() -> Result<()> {
         println!("  all {pass} checks passed");
     } else {
         println!("  {pass} passed, {fail} failed");
-    }
-
-    if fail > 0 {
         std::process::exit(1);
     }
     Ok(())
 }
 
-fn tcp_connect(host: &str, port: u16) -> bool {
-    std::net::TcpStream::connect_timeout(
-        &format!("{host}:{port}").parse().unwrap(),
-        std::time::Duration::from_secs(2),
-    )
-    .is_ok()
+/// Find the running app container by looking for devg's compose project.
+fn find_app_container() -> Result<String> {
+    // Look for containers with the devg overlay network
+    let output = Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+        .context("running docker ps")?;
+
+    let names = String::from_utf8_lossy(&output.stdout);
+
+    // Find a container on the devg_sandbox network that isn't the devg sidecar
+    for name in names.lines() {
+        let name = name.trim();
+        if name.is_empty() || name.contains("devg-devg") || name.ends_with("-devg-1") {
+            continue;
+        }
+        // Check if it's on the devg_sandbox network
+        let inspect = Command::new("docker")
+            .args(["inspect", "--format", "{{json .NetworkSettings.Networks}}", name])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default();
+        if inspect.contains("devg_sandbox") {
+            return Ok(name.to_string());
+        }
+    }
+
+    anyhow::bail!("no running devcontainer found with devg networking. Is the devcontainer up?")
 }
 
-fn dns_resolves(domain: &str) -> bool {
-    let output = Command::new("dig")
-        .args(["+short", "+time=3", domain])
-        .output();
-    match output {
-        Ok(o) => !String::from_utf8_lossy(&o.stdout).trim().is_empty(),
-        Err(_) => {
-            // dig not available, try getent
-            Command::new("getent")
-                .args(["hosts", domain])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
+fn exec_in(container: &str, cmd: &[&str]) -> Option<String> {
+    let output = Command::new("docker")
+        .arg("exec")
+        .arg(container)
+        .args(cmd)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
     }
 }
 
-fn curl_status(url: &str) -> Option<u16> {
-    let output = Command::new("curl")
-        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url])
+fn exec_exit_code(container: &str, cmd: &[&str]) -> i32 {
+    Command::new("docker")
+        .arg("exec")
+        .arg(container)
+        .args(cmd)
         .output()
-        .ok()?;
-    let code_str = String::from_utf8_lossy(&output.stdout);
-    code_str.trim().parse().ok()
+        .ok()
+        .and_then(|o| o.status.code())
+        .unwrap_or(1)
 }
