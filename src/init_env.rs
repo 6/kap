@@ -1,21 +1,30 @@
-/// Generate .devcontainer/.env from host environment.
+/// Generate .devcontainer/.env and docker-compose.devg.yml from host environment.
 ///
 /// Reads devg.toml to find which env vars the proxy sidecar needs
 /// (from token_env and ${VAR} references in headers), then writes
 /// them to .env so docker-compose passes them to the container.
+///
+/// Also regenerates the compose overlay (docker-compose.devg.yml) so it
+/// always matches the installed devg version and devg.toml config.
 use anyhow::{Context, Result};
 use std::path::Path;
 
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
-    let config_path = project.join(".devcontainer/devg.toml");
-    let env_path = project.join(".devcontainer/.env");
+    let devcontainer_dir = project.join(".devcontainer");
+    let config_path = devcontainer_dir.join("devg.toml");
+    let env_path = devcontainer_dir.join(".env");
 
     if !config_path.exists() {
         anyhow::bail!(
             "No devg.toml found at {}. Run `devg init` first to set up your devcontainer.",
             config_path.display()
         );
+    }
+
+    // Regenerate compose overlay (non-fatal: warn and continue if it fails)
+    if let Err(e) = regenerate_overlay(&devcontainer_dir, &config_path) {
+        eprintln!("[init-env] warning: could not regenerate overlay: {e}");
     }
 
     let needed_vars = vars_from_config(&config_path)?;
@@ -52,6 +61,28 @@ pub fn run(project_dir: &str) -> Result<()> {
         // Only create empty file if none exists
         std::fs::write(&env_path, "")?;
     }
+
+    Ok(())
+}
+
+/// Regenerate docker-compose.devg.yml from devg.toml config.
+fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()> {
+    let overlay_path = devcontainer_dir.join(crate::init::OVERLAY_FILENAME);
+
+    // Read service name from devcontainer.json
+    let service_name = crate::init::read_service_name(devcontainer_dir)?;
+
+    // Read compose config from devg.toml
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config: crate::config::Config =
+        toml::from_str(&content).with_context(|| format!("parsing {}", config_path.display()))?;
+    let compose_config = config.compose.unwrap_or_default();
+
+    let overlay = crate::init::generate_overlay(&service_name, &compose_config);
+    std::fs::write(&overlay_path, &overlay)
+        .with_context(|| format!("writing {}", overlay_path.display()))?;
+    eprintln!("[init-env] regenerated {}", crate::init::OVERLAY_FILENAME);
 
     Ok(())
 }
@@ -216,6 +247,61 @@ headers = { "X-Key" = "${B_API_KEY}", "X-Other" = "${C_SECRET}" }
 
         let vars = vars_from_config(&path).unwrap();
         assert_eq!(vars, vec!["A_TOKEN", "B_API_KEY", "C_SECRET"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn regenerate_overlay_from_config() {
+        let dir = std::env::temp_dir().join(format!("devg-regen-{}", std::process::id()));
+        let dc = dir.join(".devcontainer");
+        std::fs::create_dir_all(&dc).unwrap();
+
+        std::fs::write(dc.join("devcontainer.json"), r#"{"service": "myapp"}"#).unwrap();
+        std::fs::write(
+            dc.join("devg.toml"),
+            r#"
+[proxy.network]
+allow = ["github.com"]
+
+[compose]
+build = { context = "..", dockerfile = "Dockerfile", target = "proxy" }
+"#,
+        )
+        .unwrap();
+
+        regenerate_overlay(&dc, &dc.join("devg.toml")).unwrap();
+
+        let overlay = std::fs::read_to_string(dc.join(crate::init::OVERLAY_FILENAME)).unwrap();
+        assert!(overlay.contains("myapp:"));
+        assert!(overlay.contains("build:"));
+        assert!(overlay.contains("context: .."));
+        assert!(!overlay.contains("image:"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn regenerate_overlay_default_image() {
+        let dir = std::env::temp_dir().join(format!("devg-regen-img-{}", std::process::id()));
+        let dc = dir.join(".devcontainer");
+        std::fs::create_dir_all(&dc).unwrap();
+
+        std::fs::write(dc.join("devcontainer.json"), r#"{}"#).unwrap();
+        std::fs::write(
+            dc.join("devg.toml"),
+            r#"
+[proxy.network]
+allow = ["github.com"]
+"#,
+        )
+        .unwrap();
+
+        regenerate_overlay(&dc, &dc.join("devg.toml")).unwrap();
+
+        let overlay = std::fs::read_to_string(dc.join(crate::init::OVERLAY_FILENAME)).unwrap();
+        assert!(overlay.contains("app:"));
+        assert!(overlay.contains("image: ghcr.io/6/devcontainer-guard:latest"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

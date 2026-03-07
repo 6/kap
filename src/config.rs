@@ -8,6 +8,20 @@ pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
     pub mcp: Option<McpConfig>,
+    pub compose: Option<ComposeConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ComposeConfig {
+    pub image: Option<String>,
+    pub build: Option<ComposeBuild>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ComposeBuild {
+    pub context: String,
+    pub dockerfile: Option<String>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,6 +140,37 @@ pub struct McpServerConfig {
     pub allow_tools: Vec<String>,
     #[serde(default)]
     pub deny_tools: Vec<String>,
+}
+
+const DEFAULT_IMAGE: &str = "ghcr.io/6/devcontainer-guard:latest";
+
+impl ComposeConfig {
+    /// Render the YAML for the devg service's image or build section.
+    pub fn image_yaml(&self, indent: &str) -> String {
+        if let Some(ref build) = self.build {
+            let mut lines = vec![format!("{indent}build:")];
+            lines.push(format!("{indent}  context: {}", build.context));
+            if let Some(ref dockerfile) = build.dockerfile {
+                lines.push(format!("{indent}  dockerfile: {dockerfile}"));
+            }
+            if let Some(ref target) = build.target {
+                lines.push(format!("{indent}  target: {target}"));
+            }
+            lines.join("\n")
+        } else {
+            let image = self.image.as_deref().unwrap_or(DEFAULT_IMAGE);
+            format!("{indent}image: {image}")
+        }
+    }
+}
+
+impl Default for ComposeConfig {
+    fn default() -> Self {
+        Self {
+            image: Some(DEFAULT_IMAGE.to_string()),
+            build: None,
+        }
+    }
 }
 
 fn default_proxy_listen() -> String {
@@ -327,5 +372,65 @@ name = "linear"
         let config = Config::load("/nonexistent/path/devg.toml").unwrap();
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
         assert!(config.mcp.is_none());
+    }
+
+    #[test]
+    fn no_compose_config_is_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.compose.is_none());
+    }
+
+    #[test]
+    fn parse_compose_image() {
+        let toml = r#"
+[compose]
+image = "myregistry/devg:v1"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let compose = config.compose.unwrap();
+        assert_eq!(compose.image.as_deref(), Some("myregistry/devg:v1"));
+        assert!(compose.build.is_none());
+    }
+
+    #[test]
+    fn parse_compose_build() {
+        let toml = r#"
+[compose]
+build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "proxy" }
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let compose = config.compose.unwrap();
+        assert!(compose.image.is_none());
+        let build = compose.build.unwrap();
+        assert_eq!(build.context, "..");
+        assert_eq!(
+            build.dockerfile.as_deref(),
+            Some(".devcontainer/Dockerfile")
+        );
+        assert_eq!(build.target.as_deref(), Some("proxy"));
+    }
+
+    #[test]
+    fn compose_image_yaml_default() {
+        let compose = ComposeConfig::default();
+        let yaml = compose.image_yaml("    ");
+        assert_eq!(yaml, format!("    image: {DEFAULT_IMAGE}"));
+    }
+
+    #[test]
+    fn compose_image_yaml_build() {
+        let compose = ComposeConfig {
+            image: None,
+            build: Some(ComposeBuild {
+                context: "..".to_string(),
+                dockerfile: Some(".devcontainer/Dockerfile".to_string()),
+                target: Some("proxy".to_string()),
+            }),
+        };
+        let yaml = compose.image_yaml("    ");
+        assert!(yaml.contains("    build:"));
+        assert!(yaml.contains("      context: .."));
+        assert!(yaml.contains("      dockerfile: .devcontainer/Dockerfile"));
+        assert!(yaml.contains("      target: proxy"));
     }
 }

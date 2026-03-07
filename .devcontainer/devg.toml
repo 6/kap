@@ -36,6 +36,10 @@ allow = [
 [proxy.observe]
 log = "/var/log/devg/proxy.jsonl"
 
+# Compose overlay: build devg from source (this is the devg project itself)
+[compose]
+build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "proxy" }
+
 # MCP proxy: tool-level filtering + credential isolation
 [mcp]
 
