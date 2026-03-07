@@ -55,6 +55,8 @@ ENV PATH="/home/vscode/.local/bin:/home/vscode/.claude/bin:${PATH}"
 RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > ~/.zshrc \
     && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc \
     && echo 'alias ccd="claude --dangerously-skip-permissions"' >> ~/.zshrc \
-    && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json
+    && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json \
+    && mkdir -p ~/.claude \
+    && echo '{"model":"opus","effortLevel":"high"}' > ~/.claude/settings.json
 
 WORKDIR /home/vscode
