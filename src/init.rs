@@ -10,15 +10,27 @@ use std::path::Path;
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.devg.yml";
 
-pub fn run(project_dir: &str) -> Result<()> {
+pub fn run(project_dir: &str, yes: bool) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
 
     if devcontainer_dir.exists() {
-        run_existing(project, &devcontainer_dir)
+        run_existing(project, &devcontainer_dir, yes)
     } else {
         run_new(project, &devcontainer_dir)
     }
+}
+
+fn confirm(prompt: &str) -> bool {
+    use std::io::Write;
+    print!("{prompt} [Y/n] ");
+    std::io::stdout().flush().ok();
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+    let input = input.trim().to_lowercase();
+    input.is_empty() || input == "y" || input == "yes"
 }
 
 /// Read the service name from devcontainer.json. Defaults to "app".
@@ -178,7 +190,7 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
 }
 
 /// Existing project: create config, generate overlay, update devcontainer.json.
-fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
+fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
     let devcontainer_json_path = devcontainer_dir.join("devcontainer.json");
     if !devcontainer_json_path.exists() {
         anyhow::bail!(
@@ -200,11 +212,31 @@ fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
 
     let image_based = dc_json.get("image").is_some() && dc_json.get("dockerComposeFile").is_none();
 
-    // If image-based, convert to compose mode: extract image into docker-compose.yml
+    // If image-based, ask to convert to compose mode
     if image_based {
         let image = dc_json["image"]
             .as_str()
             .unwrap_or("mcr.microsoft.com/devcontainers/base:ubuntu");
+
+        println!();
+        println!(
+            "  Your devcontainer uses \x1b[1mimage\x1b[0m mode, but devg requires Docker Compose."
+        );
+        println!("  I'll convert it for you:");
+        println!();
+        println!("    \x1b[32m+\x1b[0m Create docker-compose.yml  (image: {image})");
+        println!(
+            "    \x1b[33m~\x1b[0m Update devcontainer.json   (add service, workspaceFolder, dockerComposeFile)"
+        );
+        println!(
+            "    \x1b[31m-\x1b[0m Remove \"image\" field        (moved to docker-compose.yml)"
+        );
+        println!();
+
+        if !yes && !confirm("  Proceed?") {
+            anyhow::bail!("aborted");
+        }
+
         let compose_path = devcontainer_dir.join("docker-compose.yml");
         if !compose_path.exists() {
             write_file(
@@ -213,7 +245,6 @@ fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
                     "services:\n  app:\n    image: {image}\n    volumes:\n      - ..:/workspace:cached\n    command: sleep infinity\n"
                 ),
             )?;
-            eprintln!("Created docker-compose.yml (extracted from image: {image})");
         }
     }
 
@@ -548,7 +579,7 @@ mod tests {
     #[test]
     fn new_project_scaffolds_all_files() {
         let dir = tempdir("scaffold-new");
-        run(dir.to_str().unwrap()).unwrap();
+        run(dir.to_str().unwrap(), true).unwrap();
         let dc = dir.join(".devcontainer");
         assert!(dc.join("devg.toml").exists());
         assert!(dc.join("docker-compose.yml").exists());
@@ -595,7 +626,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap()).unwrap();
+        run(dir.to_str().unwrap(), true).unwrap();
 
         assert!(dc.join("devg.toml").exists());
         assert!(dc.join(OVERLAY_FILENAME).exists());
@@ -630,7 +661,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap()).unwrap();
+        run(dir.to_str().unwrap(), true).unwrap();
 
         let updated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
@@ -652,7 +683,7 @@ mod tests {
         fs::write(dc.join("devcontainer.json"), r#"{"service": "app"}"#).unwrap();
         fs::write(dc.join("devg.toml"), "").unwrap();
 
-        assert!(run(dir.to_str().unwrap()).is_err());
+        assert!(run(dir.to_str().unwrap(), true).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -663,7 +694,7 @@ mod tests {
         fs::create_dir_all(&dc).unwrap();
         // .devcontainer/ exists but no devcontainer.json
 
-        assert!(run(dir.to_str().unwrap()).is_err());
+        assert!(run(dir.to_str().unwrap(), true).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -675,7 +706,7 @@ mod tests {
         // No "service" field in json
         fs::write(dc.join("devcontainer.json"), r#"{}"#).unwrap();
 
-        run(dir.to_str().unwrap()).unwrap();
+        run(dir.to_str().unwrap(), true).unwrap();
 
         let overlay = fs::read_to_string(dc.join(OVERLAY_FILENAME)).unwrap();
         assert!(overlay.contains("app:"));
@@ -694,7 +725,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap()).unwrap();
+        run(dir.to_str().unwrap(), true).unwrap();
 
         // docker-compose.yml should be created with the image
         let compose = fs::read_to_string(dc.join("docker-compose.yml")).unwrap();

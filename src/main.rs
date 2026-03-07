@@ -41,6 +41,10 @@ enum Command {
         /// Project directory
         #[arg(short, long, default_value = ".")]
         project_dir: String,
+
+        /// Skip confirmation prompts
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Check proxy health (for container healthcheck)
     Check {
@@ -207,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Init { project_dir } => init::run(&project_dir),
+        Command::Init { project_dir, yes } => init::run(&project_dir, yes),
         Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
