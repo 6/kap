@@ -514,4 +514,11 @@ allow = ["github.com"]
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn cli_shim_uses_sidecar_cli_shim_command() {
+        assert!(CLI_SHIM.contains("sidecar-cli-shim"));
+        assert!(CLI_SHIM.contains("basename"));
+        assert!(CLI_SHIM.starts_with("#!/bin/sh\n"));
+    }
 }

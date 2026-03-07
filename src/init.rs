@@ -1086,6 +1086,27 @@ mod tests {
     }
 
     #[test]
+    fn overlay_mounts_single_cli_shim() {
+        let compose = ComposeConfig::default();
+        let tools = vec!["gh".to_string(), "aws".to_string()];
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test");
+        // Single cli-shim.sh mounted for each tool, not per-tool shim files
+        assert!(overlay.contains("./cli-shim.sh:/usr/local/bin/gh:ro"));
+        assert!(overlay.contains("./cli-shim.sh:/usr/local/bin/aws:ro"));
+        assert!(!overlay.contains("gh-shim.sh"));
+        assert!(!overlay.contains("aws-shim.sh"));
+    }
+
+    #[test]
+    fn gitignore_includes_cli_shim() {
+        let dir = tempdir("gitignore-shim");
+        gitignore_overlay(&dir).unwrap();
+        let content = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(content.contains("cli-shim.sh"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn overlay_contains_hostname() {
         let compose = ComposeConfig::default();
         let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project");
