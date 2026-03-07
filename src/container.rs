@@ -248,8 +248,8 @@ fn resolve_workspace(project_name: &str) -> Result<PathBuf> {
         })
 }
 
-/// Check that `devcontainer` CLI is installed.
-fn require_kap_init() -> Result<()> {
+/// Check that `kap init` has been run in the current directory.
+pub fn require_kap_init() -> Result<()> {
     let path = Path::new(".devcontainer/kap.toml");
     if !path.exists() {
         anyhow::bail!("No kap.toml found. Run `kap init` first to set up your devcontainer.");
