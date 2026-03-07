@@ -24,8 +24,76 @@ pub struct RemoteState {
     pub data_dir: PathBuf,
 }
 
+fn pid_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("pid")
+}
+
+fn read_pid(data_dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(pid_file(data_dir))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+fn is_process_running(pid: u32) -> bool {
+    // signal 0 checks if process exists without sending a signal
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// Start the remote access daemon. Idempotent — if already running, prints QR and exits.
+pub async fn start(listen: &str, data_dir: PathBuf) -> Result<()> {
+    // Check if already running
+    if let Some(pid) = read_pid(&data_dir) {
+        if is_process_running(pid) {
+            eprintln!("[remote] already running (pid {pid})");
+            eprintln!();
+            let port: u16 = listen
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(19420);
+            print_pair(&data_dir, port)?;
+            return Ok(());
+        }
+    }
+
+    // Write our PID
+    let pid = std::process::id();
+    std::fs::write(pid_file(&data_dir), pid.to_string())?;
+
+    let result = run(listen, data_dir.clone()).await;
+
+    // Clean up PID file on exit
+    let _ = std::fs::remove_file(pid_file(&data_dir));
+    result
+}
+
+/// Stop the remote access daemon.
+pub fn stop() -> Result<()> {
+    let data_dir = auth::data_dir();
+    match read_pid(&data_dir) {
+        Some(pid) if is_process_running(pid) => {
+            eprintln!("[remote] stopping daemon (pid {pid})");
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+            let _ = std::fs::remove_file(pid_file(&data_dir));
+            Ok(())
+        }
+        Some(_) => {
+            // Stale PID file
+            let _ = std::fs::remove_file(pid_file(&data_dir));
+            eprintln!("[remote] not running (cleaned up stale pid file)");
+            Ok(())
+        }
+        None => {
+            eprintln!("[remote] not running");
+            Ok(())
+        }
+    }
+}
+
 /// Start the remote access HTTP daemon.
-pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
+async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
     let _pairing_token = auth::load_or_generate_pairing_token(&data_dir)?;
 
     let state = Arc::new(RemoteState {

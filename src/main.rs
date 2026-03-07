@@ -135,18 +135,14 @@ enum Command {
 
 #[derive(Subcommand)]
 enum RemoteCommand {
-    /// Start the remote access daemon
+    /// Start the remote access daemon (idempotent — shows QR if already running)
     Start {
         /// Address to listen on
         #[arg(long, default_value = "0.0.0.0:19420")]
         listen: String,
     },
-    /// Show QR code for iPhone pairing
-    Pair {
-        /// Port the remote daemon is listening on
-        #[arg(long, default_value_t = 19420)]
-        port: u16,
-    },
+    /// Stop the remote access daemon
+    Stop,
     /// List paired devices
     Devices,
     /// Revoke a paired device
@@ -300,8 +296,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Remote { command } => {
             let data_dir = remote::auth::data_dir();
             match command {
-                RemoteCommand::Start { listen } => remote::run(&listen, data_dir).await,
-                RemoteCommand::Pair { port } => remote::print_pair(&data_dir, port),
+                RemoteCommand::Start { listen } => remote::start(&listen, data_dir).await,
+                RemoteCommand::Stop => remote::stop(),
                 RemoteCommand::Devices => {
                     remote::list_devices(&data_dir);
                     Ok(())
