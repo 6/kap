@@ -1,12 +1,11 @@
 /// `devg mcp` subcommands: add, list, remove.
 ///
-/// Global MCP server registration. Tokens are stored in the OS keychain
-/// (secure at-rest) and synced to ~/.devg/auth/<name>.json (runtime cache
-/// for containers, protected by file locks during refresh).
+/// Global MCP server registration. Tokens are stored at ~/.devg/auth/<name>.json
+/// (mode 0600) and shared across all projects via Docker volume mount.
+/// File locks coordinate token refresh across multiple containers.
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use crate::keychain;
 use crate::mcp::auth;
 use crate::mcp::upstream::StoredAuth;
 
@@ -19,36 +18,14 @@ pub async fn add(name: &str, upstream: &str, reauth: bool) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
 
-    if !reauth {
-        // Check keychain first, then file
-        if let Ok(json) = keychain::load(name) {
-            if let Ok(existing) = serde_json::from_str::<StoredAuth>(&json) {
-                eprintln!("Already authenticated with {name} ({})", existing.upstream);
-                eprintln!("Use --reauth to re-authenticate.");
-                return Ok(());
-            }
-        } else if file_path.exists() {
-            if let Ok(existing) = StoredAuth::load(&file_path) {
-                eprintln!("Already authenticated with {name} ({})", existing.upstream);
-                eprintln!("Use --reauth to re-authenticate.");
-                return Ok(());
-            }
-        }
+    if file_path.exists() && !reauth {
+        let auth = StoredAuth::load(&file_path)?;
+        eprintln!("Already authenticated with {name} ({})", auth.upstream);
+        eprintln!("Use --reauth to re-authenticate.");
+        return Ok(());
     }
 
     let stored = auth::run(name, upstream).await?;
-    let json = serde_json::to_string_pretty(&stored)?;
-
-    // Store in keychain (secure at-rest)
-    if keychain::is_available() {
-        if let Err(e) = keychain::store(name, &json) {
-            eprintln!("[auth] warning: keychain store failed: {e}");
-        }
-    } else {
-        eprintln!("[auth] warning: keychain not available, using file storage only");
-    }
-
-    // Write to ~/.devg/auth/<name>.json (runtime cache for containers)
     auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
     eprintln!("[auth] tokens saved to {}", file_path.display());
 
@@ -66,37 +43,24 @@ pub async fn add(name: &str, upstream: &str, reauth: bool) -> Result<()> {
 pub fn list() -> Result<()> {
     let dir = auth_dir();
 
-    // Try keychain first for the list of names
-    let mut entries: Vec<(String, StoredAuth)> = Vec::new();
+    if !dir.exists() {
+        println!("No MCP servers registered. Run `devg mcp add <name> <upstream>` to add one.");
+        return Ok(());
+    }
 
-    if keychain::is_available() {
-        if let Ok(names) = keychain::list_names() {
-            for name in &names {
-                if let Ok(json) = keychain::load(name) {
-                    if let Ok(auth) = serde_json::from_str::<StoredAuth>(&json) {
-                        entries.push((name.clone(), auth));
-                    }
-                }
+    let mut entries: Vec<(String, StoredAuth)> = std::fs::read_dir(&dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                return None;
             }
-        }
-    }
-
-    // Fallback / supplement from auth files if keychain had nothing
-    if entries.is_empty() && dir.exists() {
-        entries = std::fs::read_dir(&dir)
-            .with_context(|| format!("reading {}", dir.display()))?
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let path = e.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    return None;
-                }
-                let name = path.file_stem()?.to_str()?.to_string();
-                let auth = StoredAuth::load(&path).ok()?;
-                Some((name, auth))
-            })
-            .collect();
-    }
+            let name = path.file_stem()?.to_str()?.to_string();
+            let auth = StoredAuth::load(&path).ok()?;
+            Some((name, auth))
+        })
+        .collect();
 
     if entries.is_empty() {
         println!("No MCP servers registered. Run `devg mcp add <name> <upstream>` to add one.");
@@ -123,36 +87,22 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-/// `devg mcp remove <name>` — delete from keychain and auth file.
+/// `devg mcp remove <name>` — delete auth file and lock file.
 pub fn remove(name: &str) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
 
-    let mut found = false;
-
-    // Remove from keychain
-    if keychain::is_available() {
-        if keychain::load(name).is_ok() {
-            keychain::delete(name)?;
-            found = true;
-        }
+    if !file_path.exists() {
+        anyhow::bail!("no auth registered for '{name}'");
     }
 
-    // Remove auth file
-    if file_path.exists() {
-        std::fs::remove_file(&file_path)
-            .with_context(|| format!("removing {}", file_path.display()))?;
-        found = true;
-    }
+    std::fs::remove_file(&file_path)
+        .with_context(|| format!("removing {}", file_path.display()))?;
 
-    // Remove lock file if present
+    // Clean up lock file if present
     let lock_path = file_path.with_extension("lock");
     if lock_path.exists() {
         let _ = std::fs::remove_file(&lock_path);
-    }
-
-    if !found {
-        anyhow::bail!("no auth registered for '{name}'");
     }
 
     eprintln!("Removed {name}");

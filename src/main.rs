@@ -1,6 +1,5 @@
 mod check;
 mod config;
-mod keychain;
 mod status;
 mod init;
 mod init_env;
