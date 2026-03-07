@@ -93,13 +93,11 @@ The CLI proxy lets the app container run tools like `gh` or `aws` without direct
 [[cli.tools]]
 name = "gh"
 allow = ["pr *", "issue *", "repo *", "search *", "auth status"]
-deny = ["auth token", "auth login", "auth logout", "api"]
 env = ["GH_TOKEN"]
 
 [[cli.tools]]
 name = "aws"
 allow = ["s3 ls *", "s3 cp *", "sts get-caller-identity"]
-deny = ["s3 rm *", "s3 rb *"]
 env = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
 ```
 

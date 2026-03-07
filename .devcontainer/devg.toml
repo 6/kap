@@ -65,5 +65,4 @@ allow_tools = ["get_*", "list_*", "search_*", "save_*"]
 [[cli.tools]]
 name = "gh"
 allow = ["pr *", "issue *", "repo *", "search *", "auth status"]
-deny = ["auth token", "auth login", "auth logout", "auth setup-git", "api"]
 env = ["GH_TOKEN"]
