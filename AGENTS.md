@@ -1,6 +1,6 @@
 # kap
 
-Run AI agents in devcontainers with network controls and remote access.
+Run AI agents in secure capsules. Built on devcontainers with network controls and remote access.
 
 ## Commands
 

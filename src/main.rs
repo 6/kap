@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "kap",
     version,
-    about = "Run AI agents in devcontainers with network controls and remote access"
+    about = "Run AI agents in secure capsules"
 )]
 struct Cli {
     #[command(subcommand)]

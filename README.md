@@ -3,7 +3,7 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-Run AI agents in devcontainers with network controls and remote access.
+Run AI agents in secure capsules. Built on devcontainers with network controls and remote access.
 
 - **Domain allowlist** - only approved domains are reachable from the container
 - **MCP tool allowlist** - only approved tools are callable on remote MCP servers
