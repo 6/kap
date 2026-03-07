@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::mcp::auth;
+use crate::mcp::client::{McpAuth, fetch_tools};
 use crate::mcp::upstream::StoredAuth;
 
 fn auth_dir() -> PathBuf {
@@ -52,26 +53,32 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mcp_url = discover_mcp_endpoint_with_headers(upstream, &header_pairs).await;
-        let Some(url) = mcp_url else {
+        let auth = McpAuth {
+            token: None,
+            headers: &header_pairs,
+        };
+        let Some(url) = discover_mcp_endpoint(upstream, &auth).await else {
             anyhow::bail!("could not verify {upstream}. Check the URL and headers.");
         };
         stored.upstream = url;
 
-        auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
+        crate::mcp::auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
         eprintln!("[auth] saved to {}", file_path.display());
     } else {
         // OAuth mode
-        let mut stored = auth::run(name, upstream).await?;
+        let mut stored = crate::mcp::auth::run(name, upstream).await?;
 
         // Verify tools/list works. If not, try common MCP subpaths.
-        let mcp_url = discover_mcp_endpoint(upstream, &stored.access_token).await;
-        let Some(url) = mcp_url else {
+        let auth = McpAuth {
+            token: Some(&stored.access_token),
+            headers: &[],
+        };
+        let Some(url) = discover_mcp_endpoint(upstream, &auth).await else {
             anyhow::bail!("could not verify {upstream}. OAuth succeeded but tools/list failed.");
         };
         stored.upstream = url;
 
-        auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
+        crate::mcp::auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
         eprintln!("[auth] tokens saved to {}", file_path.display());
     }
 
@@ -178,7 +185,11 @@ pub async fn get(name: &str) -> Result<()> {
 
     println!();
     eprint!("Fetching tools...");
-    match fetch_tools_list(&auth.upstream, token, &header_pairs).await {
+    let mcp_auth = McpAuth {
+        token,
+        headers: &header_pairs,
+    };
+    match fetch_tools(&auth.upstream, &mcp_auth).await {
         Ok(tools) => {
             eprintln!(" {} tools", tools.len());
             println!();
@@ -200,85 +211,6 @@ pub async fn get(name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn fetch_tools_list(
-    url: &str,
-    token: Option<&str>,
-    headers: &[(String, String)],
-) -> Result<Vec<serde_json::Value>> {
-    let http = reqwest::Client::new();
-
-    // 1. Initialize to establish session
-    let init_body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {"name": "devg", "version": "1.0"}
-        }
-    });
-    let mut req = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .json(&init_body)
-        .timeout(std::time::Duration::from_secs(10));
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    for (k, v) in headers {
-        req = req.header(k.as_str(), v.as_str());
-    }
-    let resp = req.send().await.context("initialize")?;
-
-    let session_id = resp
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
-
-    if !resp.status().is_success() {
-        anyhow::bail!("initialize: HTTP {}", resp.status());
-    }
-    let _ = resp.text().await;
-
-    // 2. tools/list with session
-    let list_body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list"
-    });
-    let mut req = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .json(&list_body)
-        .timeout(std::time::Duration::from_secs(10));
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    for (k, v) in headers {
-        req = req.header(k.as_str(), v.as_str());
-    }
-    if let Some(ref sid) = session_id {
-        req = req.header("Mcp-Session-Id", sid);
-    }
-
-    let resp = req.send().await.context("tools/list")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("tools/list: HTTP {}", resp.status());
-    }
-
-    let text = resp.text().await?;
-    let json = crate::check::parse_mcp_response(&text)?;
-    let tools = json["result"]["tools"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    Ok(tools)
 }
 
 /// `devg mcp remove <name>` — delete auth file and lock file.
@@ -303,39 +235,15 @@ pub fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Try tools/list with headers at the given URL and common subpaths.
-async fn discover_mcp_endpoint_with_headers(
-    base_url: &str,
-    headers: &[(String, String)],
-) -> Option<String> {
-    let base = base_url.trim_end_matches('/');
-    let candidates = [base.to_string(), format!("{base}/mcp")];
-
-    for url in &candidates {
-        eprintln!("[auth] trying {url}...");
-        match fetch_tools_list(url, None, headers).await {
-            Ok(tools) => {
-                eprintln!("[auth] success: {} tools at {url}", tools.len());
-                return Some(url.clone());
-            }
-            Err(e) => {
-                eprintln!("[auth] {url}: {e}");
-            }
-        }
-    }
-
-    None
-}
-
-/// Try tools/list at the given URL and common subpaths (/mcp).
+/// Try initialize + tools/list at the given URL and common subpaths (/mcp).
 /// Returns the working URL, or None if nothing works.
-async fn discover_mcp_endpoint(base_url: &str, token: &str) -> Option<String> {
+async fn discover_mcp_endpoint(base_url: &str, auth: &McpAuth<'_>) -> Option<String> {
     let base = base_url.trim_end_matches('/');
     let candidates = [base.to_string(), format!("{base}/mcp")];
 
     for url in &candidates {
         eprintln!("[auth] trying {url}...");
-        match fetch_tools_list(url, Some(token), &[]).await {
+        match fetch_tools(url, auth).await {
             Ok(tools) => {
                 eprintln!("[auth] success: {} tools at {url}", tools.len());
                 return Some(url.clone());

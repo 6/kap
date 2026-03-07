@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod client;
 pub mod filter;
 pub mod jsonrpc;
 pub mod upstream;
