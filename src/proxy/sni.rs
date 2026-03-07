@@ -341,4 +341,19 @@ pub(crate) mod tests {
             "example.com"
         ));
     }
+
+    #[test]
+    fn returns_none_for_invalid_utf8_sni() {
+        // Build a ClientHello then patch the SNI name bytes with invalid UTF-8
+        let mut hello = build_client_hello("example.com");
+        // Find "example.com" in the raw bytes and replace first byte with 0xFF
+        let needle = b"example.com";
+        let pos = hello
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .unwrap();
+        hello[pos] = 0xFF;
+        // Invalid UTF-8 means extract_sni returns None (treated as no SNI)
+        assert_eq!(extract_sni(&hello), None);
+    }
 }
