@@ -18,6 +18,9 @@ allow = [
   "nodejs.org",
   "*.yarnpkg.com",
   "storage.googleapis.com",
+  # mise (tool version manager)
+  "mise.jdx.dev",
+  "*.mise.jdx.dev",
   # APT
   "*.ubuntu.com",
   "*.debian.org",
