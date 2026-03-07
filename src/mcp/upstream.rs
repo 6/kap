@@ -94,6 +94,16 @@ impl UpstreamClient {
     pub async fn forward(&self, body: &[u8]) -> Result<(u16, Vec<u8>)> {
         self.ensure_valid_token().await?;
 
+        // Check if this is an initialize request — if so, start a fresh session
+        let is_initialize = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v["method"].as_str().map(|m| m == "initialize"))
+            .unwrap_or(false);
+
+        if is_initialize {
+            *self.session_id.lock().await = None;
+        }
+
         let auth = self.auth.lock().await;
         let token = auth.access_token.clone();
         let session_id = self.session_id.lock().await.clone();
