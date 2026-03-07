@@ -185,7 +185,9 @@ pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
     let token = auth::load_or_generate_pairing_token(data_dir)?;
 
     let ip = auth::local_ip().unwrap_or_else(|| "localhost".to_string());
-    let url = format!("devg://{ip}:{port}:{token}:{fingerprint}");
+    // Truncate fingerprint to first 16 hex chars (64 bits) to keep QR small
+    let short_fp = &fingerprint[..16.min(fingerprint.len())];
+    let url = format!("devg://{ip}:{port}:{token}:{short_fp}");
 
     auth::print_qr(&url);
     Ok(())

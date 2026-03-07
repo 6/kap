@@ -104,10 +104,10 @@ pub fn load_or_generate_pairing_token(dir: &Path) -> Result<String> {
     Ok(token)
 }
 
-/// Generate a 256-bit random token as base64url.
+/// Generate a 128-bit random token as base64url (22 chars).
 fn generate_token() -> String {
     use rand::RngCore;
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
