@@ -57,6 +57,6 @@ RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > ~/.zshrc \
     && echo 'alias ccd="claude --dangerously-skip-permissions"' >> ~/.zshrc \
     && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json \
     && mkdir -p ~/.claude \
-    && echo '{"model":"opus","effortLevel":"high"}' > ~/.claude/settings.json
+    && echo '{"model":"opus","effortLevel":"high","env":{"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":"1","CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS":"1","DISABLE_ERROR_REPORTING":"1","DISABLE_TELEMETRY":"1"}}' > ~/.claude/settings.json
 
 WORKDIR /home/vscode
