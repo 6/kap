@@ -7,66 +7,48 @@ use std::process::Command;
 
 const PROXY_IP: &str = "172.28.0.3";
 
+fn ok(msg: &str, pass: &mut u32) {
+    println!("\x1b[32m ok\x1b[0m  {msg}");
+    *pass += 1;
+}
+
+fn bad(msg: &str, fail: &mut u32) {
+    println!("\x1b[31m !\x1b[0m   {msg}");
+    *fail += 1;
+}
+
 pub fn run() -> Result<()> {
-    println!("devg status");
     println!();
 
-    // Config summary (read from host)
     let config = load_local_config();
     print_config_summary(&config);
 
-    // Find containers
     let (app, sidecar) = find_containers()?;
-    println!("  containers:");
-    println!("    app:   {app}");
-    println!("    proxy: {sidecar}");
-    println!();
 
     let mut pass = 0;
     let mut fail = 0;
 
-    // Network checks (exec into app container)
-    println!("  network:");
+    // Network checks
+    println!("  Network");
 
-    print!("    HTTP_PROXY ... ");
     match exec_in(&app, &["printenv", "HTTP_PROXY"]) {
-        Some(val) if val.contains(PROXY_IP) => {
-            println!("ok");
-            pass += 1;
-        }
-        Some(val) => {
-            println!("WRONG ({val})");
-            println!("           overlay may not be last in dockerComposeFile");
-            fail += 1;
-        }
-        None => {
-            println!("NOT SET");
-            fail += 1;
-        }
+        Some(val) if val.contains(PROXY_IP) => ok("HTTP_PROXY set", &mut pass),
+        Some(_) => bad("HTTP_PROXY points to wrong address (overlay may not be last in dockerComposeFile)", &mut fail),
+        None => bad("HTTP_PROXY not set (overlay may not be applied)", &mut fail),
     }
 
-    print!("    DNS resolver ... ");
     match exec_in(&app, &["cat", "/etc/resolv.conf"]) {
-        Some(resolv) if resolv.contains(PROXY_IP) => {
-            println!("ok");
-            pass += 1;
-        }
-        _ => {
-            println!("WRONG (expected {PROXY_IP})");
-            fail += 1;
-        }
+        Some(resolv) if resolv.contains(PROXY_IP) => ok("DNS resolver configured", &mut pass),
+        _ => bad("DNS resolver not pointing to proxy", &mut fail),
     }
 
-    print!("    proxy reachable ... ");
     if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")]) == 0 {
-        println!("ok");
-        pass += 1;
+        ok("proxy reachable", &mut pass);
     } else {
-        println!("FAIL");
-        fail += 1;
+        bad("proxy not reachable on :3128", &mut fail);
     }
 
-    // Pick a real allowed domain from config (first non-wildcard)
+    // DNS allow test (first non-wildcard domain from config)
     let allowed_domain = config
         .proxy
         .network
@@ -76,128 +58,116 @@ pub fn run() -> Result<()> {
         .cloned();
 
     if let Some(ref domain) = allowed_domain {
-        print!("    DNS allows {domain} ... ");
         match exec_in(&app, &["dig", "+short", "+time=3", domain]) {
-            Some(out) if !out.is_empty() => {
-                println!("ok");
-                pass += 1;
-            }
-            _ => {
-                println!("FAIL");
-                fail += 1;
-            }
+            Some(out) if !out.is_empty() => ok(&format!("DNS resolves {domain}"), &mut pass),
+            _ => bad(&format!("DNS failed to resolve {domain}"), &mut fail),
         }
     }
 
-    // .invalid is a reserved TLD (RFC 2606), guaranteed to never exist
-    print!("    DNS blocks unlisted ... ");
+    // DNS block test (.invalid is reserved by RFC 2606)
     match exec_in(&app, &["dig", "+short", "+time=3", "devg-test.invalid"]) {
-        Some(out) if out.is_empty() => {
-            println!("ok");
-            pass += 1;
-        }
-        None => {
-            println!("ok");
-            pass += 1;
-        }
-        _ => {
-            println!("FAIL (resolved, should be blocked)");
-            fail += 1;
-        }
+        Some(out) if out.is_empty() => ok("DNS blocks unlisted domains", &mut pass),
+        None => ok("DNS blocks unlisted domains", &mut pass),
+        _ => bad("DNS resolved unlisted domain (forwarder may not be active)", &mut fail),
     }
 
-    print!("    unlisted HTTPS denied ... ");
+    // HTTPS block test
     let http_code = exec_in(
         &app,
         &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://devg-test.invalid"],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
     if code == "403" || code == "000" || code.is_empty() {
-        println!("ok (connection refused)");
-        pass += 1;
+        ok("HTTPS to unlisted domain denied", &mut pass);
     } else {
-        println!("FAIL (got HTTP {code}, expected blocked)");
-        fail += 1;
+        bad(&format!("unlisted HTTPS returned HTTP {code}"), &mut fail);
     }
 
     // MCP checks
     if let Some(ref mcp) = config.mcp
         && !mcp.servers.is_empty()
     {
-            println!();
-            println!("  mcp:");
+        println!();
+        println!("  MCP");
 
-            print!("    endpoint reachable ... ");
-            if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
-                println!("ok");
-                pass += 1;
-            } else {
-                println!("FAIL");
-                fail += 1;
-            }
+        if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
+            ok("MCP proxy reachable", &mut pass);
+        } else {
+            bad("MCP proxy not reachable on :3129", &mut fail);
+        }
 
-            for server in &mcp.servers {
-                print!("    {} ... ", server.name);
-                let resp = exec_in(
-                    &app,
-                    &[
-                        "curl", "-s", "--noproxy", "*", "--max-time", "5",
-                        "-X", "POST",
-                        &format!("http://{PROXY_IP}:3129/{}", server.name),
-                        "-H", "Content-Type: application/json",
-                        "-d", r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-                    ],
-                );
-                match resp {
-                    Some(body) if body.contains("\"tools\"") => {
-                        let tool_count = body.matches("\"name\"").count();
-                        println!("ok ({tool_count} tools)");
-                        pass += 1;
-                    }
-                    Some(body) if body.contains("unknown MCP server") => {
-                        println!("NOT LOADED (check auth/credentials)");
-                        fail += 1;
-                    }
-                    Some(body) if body.contains("\"error\"") => {
-                        println!("ERROR (upstream returned error)");
-                        fail += 1;
-                    }
-                    _ => {
-                        println!("FAIL (no response)");
-                        fail += 1;
-                    }
+        for server in &mcp.servers {
+            let resp = exec_in(
+                &app,
+                &[
+                    "curl", "-s", "--noproxy", "*", "--max-time", "5",
+                    "-X", "POST",
+                    &format!("http://{PROXY_IP}:3129/{}", server.name),
+                    "-H", "Content-Type: application/json",
+                    "-d", r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                ],
+            );
+            match resp {
+                Some(body) if body.contains("\"tools\"") => {
+                    let tool_count = body.matches("\"name\"").count();
+                    ok(&format!("{} ({tool_count} tools)", server.name), &mut pass);
+                }
+                Some(body) if body.contains("unknown MCP server") => {
+                    bad(&format!("{} not loaded (check auth/credentials)", server.name), &mut fail);
+                }
+                Some(body) if body.contains("\"error\"") => {
+                    bad(&format!("{} upstream error", server.name), &mut fail);
+                }
+                _ => {
+                    bad(&format!("{} no response", server.name), &mut fail);
                 }
             }
+        }
     }
 
+    // Recent denials (from sidecar proxy log)
+    let denied_count = exec_in(
+        &sidecar,
+        &["sh", "-c", "grep -c '\"denied\"' /var/log/devg/proxy.jsonl 2>/dev/null || echo 0"],
+    )
+    .and_then(|s| s.trim().parse::<u64>().ok())
+    .unwrap_or(0);
+
+    if denied_count > 0 {
+        println!();
+        println!("  {denied_count} denied requests (run `devg why-denied` in the container for details)");
+    }
+
+    // Summary
     println!();
     if fail == 0 {
-        println!("  all {pass} checks passed");
+        println!("  \x1b[32mall {pass} checks passed\x1b[0m");
     } else {
-        println!("  {pass} passed, {fail} failed");
+        println!("  \x1b[31m{fail} failed\x1b[0m, {pass} passed");
         std::process::exit(1);
     }
+    println!();
     Ok(())
 }
 
 fn print_config_summary(config: &crate::config::Config) {
     let allow_count = config.proxy.network.allow.len();
     let deny_count = config.proxy.network.deny.len();
-    println!("  config:");
+    println!("  Config");
     if allow_count == 0 {
-        println!("    domains: NONE (no domains allowed, all traffic will be blocked)");
-    } else {
+        println!("    domains: NONE (all traffic will be blocked)");
+    } else if deny_count > 0 {
         println!("    domains: {allow_count} allowed, {deny_count} denied");
+    } else {
+        println!("    domains: {allow_count} allowed");
     }
     if let Some(ref mcp) = config.mcp {
         let names: Vec<&str> = mcp.servers.iter().map(|s| s.name.as_str()).collect();
         if names.is_empty() {
-            println!("    mcp: no servers configured");
+            println!("    mcp: no servers");
         } else {
             println!("    mcp: {}", names.join(", "));
         }
-    } else {
-        println!("    mcp: none");
     }
     println!();
 }
