@@ -1,8 +1,5 @@
 # kap
 
-> [!WARNING]
-> This is experimental and may have bugs. Use at your own risk.
-
 Run AI agents in secure capsules. Built on devcontainers with network controls and remote access.
 
 - **Domain allowlist** - only approved domains are reachable from the container
@@ -10,6 +7,9 @@ Run AI agents in secure capsules. Built on devcontainers with network controls a
 - **CLI proxy** - `gh`, `aws`, etc. are proxied with per-command allowlists
 - **Credential isolation** - tokens and API keys live on the sidecar and never enter the app container
 - **Remote monitoring** - monitor and steer agents from your phone over local WiFi
+
+> [!WARNING]
+> This is experimental and may have bugs. Use at your own risk.
 
 ## Quick start
 
