@@ -121,20 +121,25 @@ pub fn run() -> Result<()> {
         let host_auth_dir = crate::mcp::auth::host_auth_dir();
         let available = crate::mcp::list_auth_files(&host_auth_dir);
         // Pre-flight: validate credentials for all project MCP servers
+        let mut servers_without_auth: Vec<String> = Vec::new();
         for server in &mcp.servers {
             if let Some(ref env_var) = server.token_env {
                 match std::env::var(env_var) {
                     Ok(val) if !val.is_empty() => {}
-                    _ => bad(
-                        &format!("{}: ${env_var} is not set or empty", server.name),
-                        &mut fail,
-                    ),
+                    _ => {
+                        servers_without_auth.push(server.name.clone());
+                        bad(
+                            &format!("{}: ${env_var} is not set or empty", server.name),
+                            &mut fail,
+                        );
+                    }
                 }
             } else if server.headers.is_empty() {
                 // OAuth server — check auth file exists
                 let auth_path =
                     std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
                 if !auth_path.exists() {
+                    servers_without_auth.push(server.name.clone());
                     let hint = if available.is_empty() {
                         format!("run `kap mcp add {} <url>`", server.name)
                     } else {
@@ -175,20 +180,26 @@ pub fn run() -> Result<()> {
 
         // Run `kap sidecar-check --mcp` inside the sidecar (uses reqwest, handles
         // initialize + tools/list with session IDs properly).
-        if let Some(output) = exec_in(&sidecar, &["kap", "sidecar-check", "--mcp"]) {
-            for line in output.lines() {
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-                    continue;
-                };
-                let name = v["name"].as_str().unwrap_or("?");
-                if let Some(count) = v["tools"].as_u64() {
-                    ok(&format!("{name} ({count} tools)"), &mut pass);
-                } else if let Some(err) = v["error"].as_str() {
-                    bad(&format!("{name}: {err}"), &mut fail);
+        // Skip servers that already failed the pre-flight auth check.
+        if servers_without_auth.len() < mcp.servers.len() {
+            if let Some(output) = exec_in(&sidecar, &["kap", "sidecar-check", "--mcp"]) {
+                for line in output.lines() {
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                        continue;
+                    };
+                    let name = v["name"].as_str().unwrap_or("?");
+                    if servers_without_auth.iter().any(|s| s == name) {
+                        continue;
+                    }
+                    if let Some(count) = v["tools"].as_u64() {
+                        ok(&format!("{name} ({count} tools)"), &mut pass);
+                    } else if let Some(err) = v["error"].as_str() {
+                        bad(&format!("{name}: {err}"), &mut fail);
+                    }
                 }
+            } else {
+                bad("kap sidecar-check --mcp failed in sidecar", &mut fail);
             }
-        } else {
-            bad("kap sidecar-check --mcp failed in sidecar", &mut fail);
         }
     }
 
@@ -233,13 +244,13 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Recent denials (from sidecar proxy log)
+    // Recent denials (from sidecar proxy log), excluding kap's own test probes
     let denied_count = exec_in(
         &sidecar,
         &[
             "sh",
             "-c",
-            "grep -c '\"denied\"' /var/log/kap/proxy.jsonl 2>/dev/null || echo 0",
+            "grep '\"denied\"' /var/log/kap/proxy.jsonl 2>/dev/null | grep -cv 'kap-test\\.invalid' || echo 0",
         ],
     )
     .and_then(|s| s.trim().parse::<u64>().ok())

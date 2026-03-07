@@ -70,8 +70,12 @@ pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
         if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
             let action = entry.get("action").and_then(|v| v.as_str()).unwrap_or("");
             if action == "denied" {
-                let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
                 let domain = entry.get("domain").and_then(|v| v.as_str()).unwrap_or("?");
+                // Skip kap's own health-check probes
+                if domain == "kap-test.invalid" {
+                    continue;
+                }
+                let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
                 let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("?");
                 println!("{ts}  {method:8} {domain}  DENIED");
                 count += 1;
@@ -107,9 +111,12 @@ pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
                     if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
                         let action = entry.get("action").and_then(|v| v.as_str()).unwrap_or("");
                         if action == "denied" {
-                            let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
                             let domain =
                                 entry.get("domain").and_then(|v| v.as_str()).unwrap_or("?");
+                            if domain == "kap-test.invalid" {
+                                continue;
+                            }
+                            let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
                             let method =
                                 entry.get("method").and_then(|v| v.as_str()).unwrap_or("?");
                             println!("{ts}  {method:8} {domain}  DENIED");
