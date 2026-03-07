@@ -33,16 +33,34 @@ pub fn run(project_dir: &str) -> Result<()> {
 
     let needed_vars = vars_from_config(&config_path)?;
 
-    // Load existing .env so we don't overwrite manually set values
-    let existing = load_env_file(&env_path);
+    // Load existing .env values and shell patterns (# KEY=$(cmd))
+    let (existing, existing_patterns) = load_env_file(&env_path);
 
     let mut lines: Vec<String> = Vec::new();
 
     for var in &needed_vars {
-        // Keep existing value if present
         if let Some(val) = existing.get(var.as_str()) {
-            lines.push(format!("{var}={val}"));
-            continue;
+            if val.contains("$(") {
+                // Shell substitution: evaluate and write result, keep pattern as comment
+                let resolved = eval_shell_substitution(val);
+                if !resolved.is_empty() {
+                    lines.push(format!("# {var}={val}"));
+                    lines.push(format!("{var}={resolved}"));
+                    continue;
+                }
+            } else if !val.is_empty() {
+                lines.push(format!("{var}={val}"));
+                continue;
+            }
+        }
+        // Check for pattern stored as comment (re-evaluate on each run)
+        if let Some(pattern) = existing_patterns.get(var.as_str()) {
+            let resolved = eval_shell_substitution(pattern);
+            if !resolved.is_empty() {
+                lines.push(format!("# {var}={pattern}"));
+                lines.push(format!("{var}={resolved}"));
+                continue;
+            }
         }
         // Otherwise try host environment
         if let Ok(val) = std::env::var(var)
@@ -110,22 +128,67 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     Ok(())
 }
 
+/// Evaluate shell command substitutions like `$(gh auth token)`.
+/// Returns the value as-is if it doesn't contain `$(...)`.
+fn eval_shell_substitution(val: &str) -> String {
+    if !val.contains("$(") {
+        return val.to_string();
+    }
+    match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("printf '%s' {val}"))
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if result.is_empty() {
+                eprintln!("[init-env] warning: {val} evaluated to empty");
+            }
+            result
+        }
+        _ => {
+            eprintln!("[init-env] warning: failed to evaluate {val}");
+            String::new()
+        }
+    }
+}
+
 /// Load existing KEY=VALUE pairs from a .env file.
-fn load_env_file(path: &Path) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
+/// Also returns shell patterns from comments like `# KEY=$(cmd)`.
+fn load_env_file(
+    path: &Path,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    let mut values = std::collections::HashMap::new();
+    let mut patterns = std::collections::HashMap::new();
     let Ok(content) = std::fs::read_to_string(path) else {
-        return map;
+        return (values, patterns);
     };
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+        // Extract shell patterns from comments: # KEY=$(cmd)
+        if let Some(comment) = line.strip_prefix("# ") {
+            if let Some((key, val)) = comment.split_once('=') {
+                let val = val.trim();
+                if val.contains("$(") {
+                    patterns.insert(key.trim().to_string(), val.to_string());
+                }
+            }
+            continue;
+        }
+        if line.starts_with('#') {
             continue;
         }
         if let Some((key, val)) = line.split_once('=') {
-            map.insert(key.trim().to_string(), val.trim().to_string());
+            values.insert(key.trim().to_string(), val.trim().to_string());
         }
     }
-    map
+    (values, patterns)
 }
 
 /// Parse devg.toml and collect all env var names referenced by MCP server configs.
@@ -227,10 +290,11 @@ mod tests {
         let path = dir.join(".env");
         std::fs::write(&path, "FOO=bar\nBAZ=qux\n").unwrap();
 
-        let map = load_env_file(&path);
-        assert_eq!(map["FOO"], "bar");
-        assert_eq!(map["BAZ"], "qux");
-        assert_eq!(map.len(), 2);
+        let (values, patterns) = load_env_file(&path);
+        assert_eq!(values["FOO"], "bar");
+        assert_eq!(values["BAZ"], "qux");
+        assert_eq!(values.len(), 2);
+        assert!(patterns.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -242,17 +306,32 @@ mod tests {
         let path = dir.join(".env");
         std::fs::write(&path, "# comment\n\nKEY=val\n  \n# another\n").unwrap();
 
-        let map = load_env_file(&path);
-        assert_eq!(map.len(), 1);
-        assert_eq!(map["KEY"], "val");
+        let (values, _) = load_env_file(&path);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values["KEY"], "val");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_env_file_extracts_shell_patterns() {
+        let dir = std::env::temp_dir().join(format!("devg-loadenv3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "# GH_TOKEN=$(gh auth token)\nGH_TOKEN=old_value\n").unwrap();
+
+        let (values, patterns) = load_env_file(&path);
+        assert_eq!(values["GH_TOKEN"], "old_value");
+        assert_eq!(patterns["GH_TOKEN"], "$(gh auth token)");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn load_env_file_missing_returns_empty() {
-        let map = load_env_file(Path::new("/nonexistent/.env"));
-        assert!(map.is_empty());
+        let (values, patterns) = load_env_file(Path::new("/nonexistent/.env"));
+        assert!(values.is_empty());
+        assert!(patterns.is_empty());
     }
 
     #[test]
