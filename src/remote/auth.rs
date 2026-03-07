@@ -245,17 +245,49 @@ pub fn print_qr(data: &str) {
         }
     };
 
-    let string = code
-        .render::<char>()
-        .quiet_zone(true)
-        .module_dimensions(2, 1)
-        .build();
+    // Render using Unicode half-blocks for compact output.
+    // Each character encodes two vertical modules: top and bottom.
+    let colors = code.to_colors();
+    let width = code.width();
+    let modules: Vec<bool> = colors.iter().map(|c| *c == qrcode::Color::Dark).collect();
+
+    // Add 1-module quiet zone
+    let total_w = width + 2;
+    let total_h = width + 2;
+
+    let get = |r: usize, c: usize| -> bool {
+        if r == 0 || r == total_h - 1 || c == 0 || c == total_w - 1 {
+            false // quiet zone
+        } else {
+            modules[(r - 1) * width + (c - 1)]
+        }
+    };
 
     println!();
-    println!("{string}");
+    // Process two rows at a time using half-block characters
+    let mut row = 0;
+    while row < total_h {
+        let mut line = String::from("  "); // indent
+        for col in 0..total_w {
+            let top = get(row, col);
+            let bottom = if row + 1 < total_h {
+                get(row + 1, col)
+            } else {
+                false
+            };
+            line.push(match (top, bottom) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            });
+        }
+        println!("{line}");
+        row += 2;
+    }
     println!();
-    println!("  Scan this QR code with the devg iPhone app");
-    println!("  Or use this URL: {data}");
+    println!("  Scan with the devg app to pair");
+    println!("  {data}");
     println!();
 }
 
