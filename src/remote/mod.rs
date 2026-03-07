@@ -42,18 +42,18 @@ fn is_process_running(pid: u32) -> bool {
 /// Start the remote access daemon. Idempotent — if already running, prints QR and exits.
 pub async fn start(listen: &str, data_dir: PathBuf) -> Result<()> {
     // Check if already running
-    if let Some(pid) = read_pid(&data_dir) {
-        if is_process_running(pid) {
-            eprintln!("[remote] already running (pid {pid})");
-            eprintln!();
-            let port: u16 = listen
-                .rsplit(':')
-                .next()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(19420);
-            print_pair(&data_dir, port)?;
-            return Ok(());
-        }
+    if let Some(pid) = read_pid(&data_dir)
+        && is_process_running(pid)
+    {
+        eprintln!("[remote] already running (pid {pid})");
+        eprintln!();
+        let port: u16 = listen
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(19420);
+        print_pair(&data_dir, port)?;
+        return Ok(());
     }
 
     // Write our PID

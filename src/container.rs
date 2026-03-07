@@ -101,33 +101,26 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
 }
 
 /// List all running devcontainers.
-pub fn list() -> Result<()> {
+pub fn list(stats: bool) -> Result<()> {
     let groups = crate::remote::containers::find_all_containers()?;
     if groups.is_empty() {
         println!("No running devcontainers.");
         return Ok(());
     }
 
-    let stats = collect_stats();
+    let resource_stats = if stats {
+        collect_stats()
+    } else {
+        Default::default()
+    };
 
     for (i, g) in groups.iter().enumerate() {
         if i > 0 {
             println!();
         }
-        let healthy =
-            crate::remote::containers::exec_exit_code(&g.sidecar, &["devg", "check", "--proxy"])
-                == 0;
-        let status_icon = if healthy {
-            "\x1b[32m●\x1b[0m"
-        } else {
-            "\x1b[31m●\x1b[0m"
-        };
-        let status_text = if healthy { "healthy" } else { "unhealthy" };
-
-        println!("{status_icon} \x1b[1m{}\x1b[0m  {status_text}", g.project);
-
-        print_container_line("  app", &g.app, &stats);
-        print_container_line("  devg", &g.sidecar, &stats);
+        println!("\x1b[1m{}\x1b[0m", g.project);
+        print_container_line("  app", &g.app, &resource_stats);
+        print_container_line("  devg", &g.sidecar, &resource_stats);
     }
     Ok(())
 }
