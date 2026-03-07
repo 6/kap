@@ -98,7 +98,7 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     println!();
     println!("Next:");
     println!("  devcontainer up --workspace-folder .");
-    println!("  devg doctor   # verify everything is wired correctly");
+    println!("  devg status   # verify everything is wired correctly");
 
     Ok(())
 }

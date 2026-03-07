@@ -7,7 +7,7 @@ use std::process::Command;
 const PROXY_IP: &str = "172.28.0.3";
 
 pub fn run() -> Result<()> {
-    println!("devg doctor");
+    println!("devg status");
     println!();
 
     let container = find_app_container()?;
