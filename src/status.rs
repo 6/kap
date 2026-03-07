@@ -135,7 +135,7 @@ pub fn run() -> Result<()> {
 
     if denied_count > 0 {
         println!();
-        println!("  {denied_count} denied requests (run `devg why-denied` in the container for details)");
+        println!("  {denied_count} denied requests (run `devg why-denied` for details)");
     }
 
     // Summary

@@ -107,7 +107,35 @@ async fn main() -> anyhow::Result<()> {
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
         Command::Check { proxy } => check::run(proxy).await,
-        Command::WhyDenied { tail, log } => proxy::log::why_denied(&log, tail).await,
+        Command::WhyDenied { tail, log } => {
+            if std::path::Path::new(&log).exists() {
+                // Running inside the container
+                proxy::log::why_denied(&log, tail).await
+            } else {
+                // Running on the host, exec into sidecar
+                let mut cmd = std::process::Command::new("docker");
+                cmd.args(["exec", "-t"]);
+                // Find sidecar container
+                let ps = std::process::Command::new("docker")
+                    .args(["ps", "--format", "{{.Names}}"])
+                    .output()?;
+                let names = String::from_utf8_lossy(&ps.stdout);
+                let sidecar = names
+                    .lines()
+                    .find(|n| n.contains("devg-devg") || n.ends_with("-devg-1"))
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "no running devg sidecar found.\n\n  \
+                         Start it with: devcontainer up --workspace-folder ."
+                    ))?;
+                cmd.arg(sidecar);
+                cmd.args(["devg", "why-denied"]);
+                if tail {
+                    cmd.arg("--tail");
+                }
+                let status = cmd.status()?;
+                std::process::exit(status.code().unwrap_or(1));
+            }
+        }
         Command::Auth {
             name,
             upstream,
