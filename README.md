@@ -13,7 +13,7 @@ Run AI agents in secure capsules. Built on devcontainers with network controls a
 
 ## Quick start
 
-Requires [Docker](https://docs.docker.com/get-docker/) (or Colima, OrbStack, etc.) and the [devcontainer CLI](https://github.com/devcontainers/cli) (`npm install -g @devcontainers/cli`).
+Requires [Docker](https://docs.docker.com/get-docker/) (or Colima, OrbStack, etc.) and the [devcontainer CLI](https://github.com/devcontainers/cli).
 
 ```bash
 cargo install kap
