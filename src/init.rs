@@ -1067,6 +1067,16 @@ mod tests {
     }
 
     #[test]
+    fn env_var_default_known_var() {
+        assert_eq!(env_var_default("GH_TOKEN"), Some("$(gh auth token)"));
+    }
+
+    #[test]
+    fn env_var_default_unknown_var() {
+        assert_eq!(env_var_default("UNKNOWN_VAR"), None);
+    }
+
+    #[test]
     fn overlay_contains_hostname() {
         let compose = ComposeConfig::default();
         let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project");

@@ -485,4 +485,32 @@ allow = ["github.com"]
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn env_var_default_fallback_resolves_known_var() {
+        // Simulate: .env is empty, host env doesn't have the var,
+        // but env_var_default knows a shell expression for it.
+        let dir = std::env::temp_dir().join(format!("kap-envfallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_path = dir.join(".env");
+        std::fs::write(&env_path, "").unwrap();
+
+        let (existing, existing_patterns) = load_env_file(&env_path);
+        assert!(existing.is_empty());
+        assert!(existing_patterns.is_empty());
+
+        // env_var_default should return a shell expression for GH_TOKEN
+        let expr = crate::init::env_var_default("GH_TOKEN");
+        assert_eq!(expr, Some("$(gh auth token)"));
+
+        // And it should be evaluable (if gh is installed)
+        if let Some(expr) = expr {
+            let result = eval_shell_substitution(expr);
+            // We don't assert the value since gh may not be authed in CI,
+            // but verify it doesn't panic
+            let _ = result;
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
