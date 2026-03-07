@@ -16,7 +16,7 @@ if ! command -v mise &>/dev/null; then
 fi
 export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"' >> ~/.zshenv
-echo 'eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshrc
+echo '[ -x ~/.local/bin/mise ] && eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshrc
 mise trust 2>/dev/null || true
 mise install 2>/dev/null || true
 
