@@ -66,20 +66,32 @@ pub fn run() -> Result<()> {
         fail += 1;
     }
 
-    print!("    DNS allows github.com ... ");
-    match exec_in(&app, &["dig", "+short", "+time=3", "github.com"]) {
-        Some(out) if !out.is_empty() => {
-            println!("ok");
-            pass += 1;
-        }
-        _ => {
-            println!("FAIL");
-            fail += 1;
+    // Pick a real allowed domain from config (first non-wildcard)
+    let allowed_domain = config
+        .proxy
+        .network
+        .allow
+        .iter()
+        .find(|d| !d.starts_with('*'))
+        .cloned();
+
+    if let Some(ref domain) = allowed_domain {
+        print!("    DNS allows {domain} ... ");
+        match exec_in(&app, &["dig", "+short", "+time=3", domain]) {
+            Some(out) if !out.is_empty() => {
+                println!("ok");
+                pass += 1;
+            }
+            _ => {
+                println!("FAIL");
+                fail += 1;
+            }
         }
     }
 
-    print!("    DNS blocks evil.test ... ");
-    match exec_in(&app, &["dig", "+short", "+time=3", "evil.test"]) {
+    // .invalid is a reserved TLD (RFC 2606), guaranteed to never exist
+    print!("    DNS blocks unlisted ... ");
+    match exec_in(&app, &["dig", "+short", "+time=3", "devg-test.invalid"]) {
         Some(out) if out.is_empty() => {
             println!("ok");
             pass += 1;
@@ -97,7 +109,7 @@ pub fn run() -> Result<()> {
     print!("    HTTPS blocked ... ");
     let http_code = exec_in(
         &app,
-        &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://example.com"],
+        &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://devg-test.invalid"],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
     if code == "403" || code == "000" || code.is_empty() {
