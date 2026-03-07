@@ -172,7 +172,16 @@ pub fn run() -> Result<()> {
                     if let Some(count) = v["tools"].as_u64() {
                         ok(&format!("\x1b[1m{name}\x1b[0m ({count} tools)"), &mut pass);
                     } else if let Some(err) = v["error"].as_str() {
-                        bad(&format!("\x1b[1m{name}\x1b[0m: {err}"), &mut fail);
+                        if err.contains("404") {
+                            bad(
+                                &format!(
+                                    "\x1b[1m{name}\x1b[0m: not loaded by sidecar (run `kap up --reset`)"
+                                ),
+                                &mut fail,
+                            );
+                        } else {
+                            bad(&format!("\x1b[1m{name}\x1b[0m: {err}"), &mut fail);
+                        }
                     }
                 }
             } else {
