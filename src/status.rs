@@ -119,40 +119,18 @@ pub fn run() -> Result<()> {
         && !mcp.servers.is_empty()
     {
         let host_auth_dir = crate::mcp::auth::host_auth_dir();
-        let available = crate::mcp::list_auth_files(&host_auth_dir);
-        // Pre-flight: validate credentials for all project MCP servers
+        // Pre-flight: identify servers without credentials (already shown in config summary)
         let mut servers_without_auth: Vec<String> = Vec::new();
         for server in &mcp.servers {
             if let Some(ref env_var) = server.token_env {
-                match std::env::var(env_var) {
-                    Ok(val) if !val.is_empty() => {}
-                    _ => {
-                        servers_without_auth.push(server.name.clone());
-                        bad(
-                            &format!("{}: ${env_var} is not set or empty", server.name),
-                            &mut fail,
-                        );
-                    }
+                if std::env::var(env_var).map(|v| v.is_empty()).unwrap_or(true) {
+                    servers_without_auth.push(server.name.clone());
                 }
             } else if server.headers.is_empty() {
-                // OAuth server — check auth file exists
                 let auth_path =
                     std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
                 if !auth_path.exists() {
                     servers_without_auth.push(server.name.clone());
-                    let hint = if available.is_empty() {
-                        format!("run `kap mcp add {} <url>`", server.name)
-                    } else {
-                        format!(
-                            "available: {}. run `kap mcp add {} <url>` or check for typos",
-                            available.join(", "),
-                            server.name
-                        )
-                    };
-                    bad(
-                        &format!("{}: no auth registered ({})", server.name, hint),
-                        &mut fail,
-                    );
                 }
             }
         }
@@ -217,29 +195,36 @@ pub fn run() -> Result<()> {
             bad("CLI proxy not reachable on :3130", &mut fail);
         }
 
-        // Check each tool's shim is installed
+        // Check each tool's shim + credentials
         for tool in &cli.tools {
-            if exec_exit_code(&app, &["which", &tool.name]) == 0 {
-                ok(&format!("{} shim installed", tool.name), &mut pass);
-            } else {
+            let shim_ok = exec_exit_code(&app, &["which", &tool.name]) == 0;
+            let mut missing_vars: Vec<&str> = Vec::new();
+            for var in &tool.env {
+                if exec_exit_code(&sidecar, &["sh", "-c", &format!("test -n \"${var}\"")]) != 0 {
+                    missing_vars.push(var);
+                }
+            }
+
+            if shim_ok && missing_vars.is_empty() {
+                ok(&format!("{} ready", tool.name), &mut pass);
+            } else if !shim_ok {
                 bad(
                     &format!("{} shim not found in app container", tool.name),
                     &mut fail,
                 );
-            }
-        }
-
-        // Check env vars are set on sidecar
-        for tool in &cli.tools {
-            for var in &tool.env {
-                if exec_exit_code(&sidecar, &["sh", "-c", &format!("test -n \"${var}\"")]) == 0 {
-                    ok(&format!("${var} set on sidecar"), &mut pass);
-                } else {
-                    bad(
-                        &format!("{}: ${var} not set on sidecar", tool.name),
-                        &mut fail,
-                    );
-                }
+            } else {
+                bad(
+                    &format!(
+                        "{}: {} not set on sidecar",
+                        tool.name,
+                        missing_vars
+                            .iter()
+                            .map(|v| format!("${v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    &mut fail,
+                );
             }
         }
     }

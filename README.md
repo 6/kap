@@ -121,9 +121,11 @@ The daemon runs on the host. All API endpoints require a bearer token issued dur
 
 ```mermaid
 graph LR
-    subgraph "Internal network"
-        App["App container<br/>(isolated, no tokens)"]
-        subgraph "kap sidecar (credentials)"
+    subgraph internal ["Internal Docker network"]
+        subgraph app ["App container"]
+            Agent["AI agent<br/>(Claude Code, Codex, etc.)"]
+        end
+        subgraph sidecar ["kap sidecar"]
             DP["Domain proxy :3128"]
             DNS["DNS forwarder :53"]
             MCP["MCP proxy :3129"]
@@ -131,10 +133,18 @@ graph LR
         end
     end
 
-    App -- "HTTP_PROXY" --> DP --> Internet
-    App -- "DNS" --> DNS --> Upstream_DNS["Upstream DNS"]
-    App -- "MCP" --> MCP --> MCP_Servers["MCP servers"]
-    App -- "gh, aws, ..." --> CLI --> APIs
+    Agent -- "HTTP_PROXY" --> DP --> Internet
+    Agent -- "DNS" --> DNS --> Upstream_DNS["Upstream DNS"]
+    Agent -- "MCP" --> MCP --> MCP_Servers["MCP servers"]
+    Agent -- "gh, aws, ..." --> CLI --> APIs
+
+    style app fill:#1a1a2e,stroke:#e94560,color:#eee
+    style sidecar fill:#1a1a2e,stroke:#0f3460,color:#eee
+    style Agent fill:#16213e,stroke:#e94560,color:#eee
+    style DP fill:#16213e,stroke:#0f3460,color:#eee
+    style DNS fill:#16213e,stroke:#0f3460,color:#eee
+    style MCP fill:#16213e,stroke:#0f3460,color:#eee
+    style CLI fill:#16213e,stroke:#0f3460,color:#eee
 ```
 
 - The app container has **no external network route**. All traffic goes through the sidecar.
