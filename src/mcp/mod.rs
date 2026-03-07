@@ -425,7 +425,7 @@ mod tests {
     async fn start_mcp_proxy(upstream_port: u16, allow_tools: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        // Keep listener bound — pass it to the spawned task to avoid TOCTOU
 
         let auth = StoredAuth {
             upstream: format!("http://127.0.0.1:{upstream_port}"),
@@ -466,9 +466,6 @@ mod tests {
         });
 
         tokio::spawn(async move {
-            let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
-                .await
-                .unwrap();
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     continue;
