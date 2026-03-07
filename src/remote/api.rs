@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::RemoteState;
 use crate::remote::{agent, containers};
@@ -12,19 +12,19 @@ use crate::remote::{agent, containers};
 type Body = Full<Bytes>;
 
 pub async fn handle(
-    req: &Request<hyper::body::Incoming>,
+    req: Request<hyper::body::Incoming>,
     state: &Arc<RemoteState>,
 ) -> Result<Response<Body>> {
-    let path = req.uri().path();
-    let method = req.method();
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
 
-    match (method, path) {
-        (&hyper::Method::GET, "/api/status") => handle_status(state).await,
-        (&hyper::Method::GET, "/api/logs") => handle_logs(req, state).await,
-        (&hyper::Method::GET, "/api/logs/denied") => handle_logs_denied(state).await,
-        (&hyper::Method::POST, "/api/pair") => handle_pair(req, state).await,
-        (&hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(state).await,
-        (&hyper::Method::GET, p) if p.starts_with("/api/agent/session/") => {
+    match (method, path.as_str()) {
+        (hyper::Method::GET, "/api/status") => handle_status(state).await,
+        (hyper::Method::GET, "/api/logs") => handle_logs(&req, state).await,
+        (hyper::Method::GET, "/api/logs/denied") => handle_logs_denied(state).await,
+        (hyper::Method::POST, "/api/pair") => handle_pair(state).await,
+        (hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(state).await,
+        (hyper::Method::GET, p) if p.starts_with("/api/agent/session/") => {
             let rest = &p["/api/agent/session/".len()..];
             if let Some(id) = rest.strip_suffix("/diff") {
                 handle_agent_diff(id, state).await
@@ -32,10 +32,12 @@ pub async fn handle(
                 handle_agent_session(rest, state).await
             }
         }
-        (&hyper::Method::POST, p) if p.starts_with("/api/agent/session/") => {
-            let rest = &p["/api/agent/session/".len()..];
+        (hyper::Method::POST, p) if p.starts_with("/api/agent/session/") => {
+            let rest = p["/api/agent/session/".len()..].to_string();
             if let Some(id) = rest.strip_suffix("/cancel") {
                 handle_agent_cancel(id, state).await
+            } else if let Some(id) = rest.strip_suffix("/message") {
+                handle_agent_message(req, id, state).await
             } else {
                 Ok(json_response(
                     StatusCode::NOT_FOUND,
@@ -201,10 +203,7 @@ struct PairResponse {
     device_id: String,
 }
 
-async fn handle_pair(
-    _req: &Request<hyper::body::Incoming>,
-    state: &Arc<RemoteState>,
-) -> Result<Response<Body>> {
+async fn handle_pair(state: &Arc<RemoteState>) -> Result<Response<Body>> {
     // The auth middleware already validated this is a pairing token.
     // Issue a session token and pair the device.
     let device_name = "iPhone"; // TODO: parse from request body
@@ -348,6 +347,105 @@ struct CancelResponse {
     message: &'static str,
 }
 
+#[derive(Deserialize)]
+struct MessageRequest {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct MessageResponse {
+    sent: bool,
+    session_id: String,
+}
+
+async fn handle_agent_message(
+    req: Request<hyper::body::Incoming>,
+    session_id: &str,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match containers::find_containers() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &ErrorBody {
+                    error: "no containers running",
+                },
+            ));
+        }
+    };
+
+    // Check agent is not currently running (can only send between turns)
+    if agent::is_agent_running(&app).is_some() {
+        return Ok(json_response(
+            StatusCode::CONFLICT,
+            &ErrorBody {
+                error: "agent is currently running; wait for it to finish before sending a message",
+            },
+        ));
+    }
+
+    // Parse the request body
+    let body_bytes = req.into_body().collect().await?.to_bytes();
+    let msg_req: MessageRequest = match serde_json::from_slice(&body_bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(json_response(
+                StatusCode::BAD_REQUEST,
+                &ErrorBodyOwned {
+                    error: format!("invalid JSON: {e}"),
+                },
+            ));
+        }
+    };
+
+    if msg_req.message.trim().is_empty() {
+        return Ok(json_response(
+            StatusCode::BAD_REQUEST,
+            &ErrorBody {
+                error: "message cannot be empty",
+            },
+        ));
+    }
+
+    // Launch claude --resume in detached mode so the HTTP request returns immediately
+    let session_id_owned = session_id.to_string();
+    let exit = containers::exec_exit_code(
+        &app,
+        &[
+            "sh",
+            "-c",
+            &format!(
+                "nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
+                shell_escape(&session_id_owned),
+                shell_escape(&msg_req.message),
+            ),
+        ],
+    );
+
+    if exit == 0 {
+        Ok(json_response(
+            StatusCode::OK,
+            &MessageResponse {
+                sent: true,
+                session_id: session_id_owned,
+            },
+        ))
+    } else {
+        Ok(json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &ErrorBody {
+                error: "failed to launch claude --resume",
+            },
+        ))
+    }
+}
+
+/// Shell-escape a string for safe use in sh -c.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[derive(Serialize)]
 struct ErrorBodyOwned {
     error: String,
@@ -445,6 +543,47 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(v["diff"].as_str().unwrap().contains("+added"));
+    }
+
+    #[test]
+    fn shell_escape_simple() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_escape_with_quotes() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_escape_with_special_chars() {
+        assert_eq!(shell_escape("a; rm -rf /"), "'a; rm -rf /'");
+    }
+
+    #[test]
+    fn message_request_deserializes() {
+        let json = r#"{"message":"fix the tests"}"#;
+        let req: MessageRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "fix the tests");
+    }
+
+    #[test]
+    fn message_request_missing_field_fails() {
+        let json = r#"{"prompt":"fix the tests"}"#;
+        let result = serde_json::from_str::<MessageRequest>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn message_response_serializes() {
+        let resp = MessageResponse {
+            sent: true,
+            session_id: "abc-123".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["sent"], true);
+        assert_eq!(v["session_id"], "abc-123");
     }
 
     #[test]

@@ -118,7 +118,7 @@ async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Respon
     // Special case: /api/pair only accepts the pairing token
     if path == "/api/pair" {
         match auth_result.as_deref() {
-            Some("pairing") => return api::handle(&req, &state).await,
+            Some("pairing") => return api::handle(req, &state).await,
             _ => {
                 return Ok(Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
@@ -146,7 +146,7 @@ async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Respon
     if path.starts_with("/ws/") {
         ws::handle(req, state).await
     } else if path.starts_with("/api/") {
-        api::handle(&req, &state).await
+        api::handle(req, &state).await
     } else {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
