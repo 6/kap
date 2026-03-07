@@ -134,6 +134,18 @@ pub fn run() -> Result<()> {
         }
 
         for server in &mcp.servers {
+            // Some MCP servers (e.g. Linear) require initialize before tools/list.
+            // Send initialize first to establish a session, then tools/list.
+            let _ = exec_in(
+                &app,
+                &[
+                    "curl", "-s", "--noproxy", "*", "--max-time", "5",
+                    "-X", "POST",
+                    &format!("http://{PROXY_IP}:3129/{}", server.name),
+                    "-H", "Content-Type: application/json",
+                    "-d", r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"devg-status","version":"1.0"}}}"#,
+                ],
+            );
             let resp = exec_in(
                 &app,
                 &[
