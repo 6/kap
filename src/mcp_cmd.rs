@@ -53,9 +53,10 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let mcp_url = discover_mcp_endpoint_with_headers(upstream, &header_pairs).await;
-        if let Some(ref url) = mcp_url {
-            stored.upstream = url.clone();
-        }
+        let Some(url) = mcp_url else {
+            anyhow::bail!("could not verify {upstream}. Check the URL and headers.");
+        };
+        stored.upstream = url;
 
         auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
         eprintln!("[auth] saved to {}", file_path.display());
@@ -65,9 +66,10 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
 
         // Verify tools/list works. If not, try common MCP subpaths.
         let mcp_url = discover_mcp_endpoint(upstream, &stored.access_token).await;
-        if let Some(ref url) = mcp_url {
-            stored.upstream = url.clone();
-        }
+        let Some(url) = mcp_url else {
+            anyhow::bail!("could not verify {upstream}. OAuth succeeded but tools/list failed.");
+        };
+        stored.upstream = url;
 
         auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
         eprintln!("[auth] tokens saved to {}", file_path.display());
@@ -301,7 +303,7 @@ pub fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Try tools/list with static headers at the given URL and common subpaths.
+/// Try tools/list with headers at the given URL and common subpaths.
 async fn discover_mcp_endpoint_with_headers(
     base_url: &str,
     headers: &[(String, String)],
@@ -310,10 +312,10 @@ async fn discover_mcp_endpoint_with_headers(
     let candidates = [base.to_string(), format!("{base}/mcp")];
 
     for url in &candidates {
-        eprintln!("[auth] trying tools/list at {url}...");
-        match try_tools_list_with_headers(url, headers).await {
-            Ok(count) => {
-                eprintln!("[auth] success: {count} tools available at {url}");
+        eprintln!("[auth] trying {url}...");
+        match fetch_tools_list(url, None, headers).await {
+            Ok(tools) => {
+                eprintln!("[auth] success: {} tools at {url}", tools.len());
                 return Some(url.clone());
             }
             Err(e) => {
@@ -322,41 +324,7 @@ async fn discover_mcp_endpoint_with_headers(
         }
     }
 
-    eprintln!("[auth] warning: tools/list failed at all endpoints");
     None
-}
-
-async fn try_tools_list_with_headers(url: &str, headers: &[(String, String)]) -> Result<usize> {
-    let http = reqwest::Client::new();
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list"
-    });
-    let mut req = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&body);
-
-    for (key, value) in headers {
-        req = req.header(key.as_str(), value.as_str());
-    }
-
-    let resp = req.send().await.context("connecting to MCP server")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}", resp.status());
-    }
-
-    let json: serde_json::Value = resp.json().await.context("parsing response")?;
-    if let Some(err) = json.get("error") {
-        anyhow::bail!("JSON-RPC error: {err}");
-    }
-    let count = json["result"]["tools"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
-    Ok(count)
 }
 
 /// Try tools/list at the given URL and common subpaths (/mcp).
@@ -366,10 +334,10 @@ async fn discover_mcp_endpoint(base_url: &str, token: &str) -> Option<String> {
     let candidates = [base.to_string(), format!("{base}/mcp")];
 
     for url in &candidates {
-        eprintln!("[auth] trying tools/list at {url}...");
-        match try_tools_list(url, token).await {
-            Ok(count) => {
-                eprintln!("[auth] success: {count} tools available at {url}");
+        eprintln!("[auth] trying {url}...");
+        match fetch_tools_list(url, Some(token), &[]).await {
+            Ok(tools) => {
+                eprintln!("[auth] success: {} tools at {url}", tools.len());
                 return Some(url.clone());
             }
             Err(e) => {
@@ -378,41 +346,7 @@ async fn discover_mcp_endpoint(base_url: &str, token: &str) -> Option<String> {
         }
     }
 
-    eprintln!("[auth] warning: tools/list failed at all endpoints");
-    eprintln!("[auth] you may need to set `upstream` explicitly in devg.toml");
     None
-}
-
-async fn try_tools_list(url: &str, token: &str) -> Result<usize> {
-    let http = reqwest::Client::new();
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list"
-    });
-    let resp = http
-        .post(url)
-        .bearer_auth(token)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .context("connecting to MCP server")?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}", resp.status());
-    }
-
-    let json: serde_json::Value = resp.json().await.context("parsing response")?;
-    if let Some(err) = json.get("error") {
-        anyhow::bail!("JSON-RPC error: {err}");
-    }
-    let count = json["result"]["tools"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
-    Ok(count)
 }
 
 #[cfg(test)]
