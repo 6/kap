@@ -106,17 +106,17 @@ pub fn run() -> Result<()> {
         }
     }
 
-    print!("    HTTPS blocked ... ");
+    print!("    unlisted HTTPS denied ... ");
     let http_code = exec_in(
         &app,
         &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://devg-test.invalid"],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
     if code == "403" || code == "000" || code.is_empty() {
-        println!("ok");
+        println!("ok (connection refused)");
         pass += 1;
     } else {
-        println!("FAIL (HTTP {code})");
+        println!("FAIL (got HTTP {code}, expected blocked)");
         fail += 1;
     }
 
