@@ -87,13 +87,14 @@ pub fn generate_overlay(
     cli_tools: &[String],
     subnet_prefix: &str,
     project_name: &str,
+    ssh_auth_sock: Option<&str>,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
     // CLI tool proxying: inline the shim script via Docker Compose configs so we
     // don't need a separate cli-shim.sh file on disk. One config is mounted at
     // /usr/local/bin/<tool> for each tool (busybox pattern via basename "$0").
-    let (cli_configs_top, cli_configs_svc, cli_volumes) = if cli_tools.is_empty() {
-        (String::new(), String::new(), String::new())
+    let (cli_configs_top, cli_configs_svc) = if cli_tools.is_empty() {
+        (String::new(), String::new())
     } else {
         let top = r#"configs:
   cli-shim:
@@ -110,8 +111,27 @@ pub fn generate_overlay(
             })
             .collect();
         let svc_block = format!("\n    configs:\n{}", svc.join("\n"));
-        let vol_block = "\n    volumes:\n      - kap-bin:/opt/kap:ro".to_string();
-        (top, svc_block, vol_block)
+        (top, svc_block)
+    };
+    // App service volumes: CLI shim binary + SSH agent socket (both optional)
+    let app_volumes = {
+        let mut entries: Vec<String> = Vec::new();
+        if !cli_tools.is_empty() {
+            entries.push("      - kap-bin:/opt/kap:ro".to_string());
+        }
+        if let Some(sock) = ssh_auth_sock {
+            entries.push(format!("      - {sock}:/ssh-agent:ro"));
+        }
+        if entries.is_empty() {
+            String::new()
+        } else {
+            format!("\n    volumes:\n{}", entries.join("\n"))
+        }
+    };
+    let ssh_env = if ssh_auth_sock.is_some() {
+        "\n      SSH_AUTH_SOCK: /ssh-agent"
+    } else {
+        ""
     };
     let app_ip = format!("{subnet_prefix}.2");
     let sidecar_ip = format!("{subnet_prefix}.3");
@@ -132,13 +152,13 @@ pub fn generate_overlay(
       http_proxy: http://{sidecar_ip}:3128
       https_proxy: http://{sidecar_ip}:3128
       NO_PROXY: localhost,127.0.0.1
-      no_proxy: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1{ssh_env}
     # DNS goes through kap's filtered forwarder (only resolves allowed domains)
     dns:
       - {sidecar_ip}
     networks:
       kap_sandbox:
-        ipv4_address: {app_ip}{cli_configs_svc}{cli_volumes}
+        ipv4_address: {app_ip}{cli_configs_svc}{app_volumes}
     depends_on:
       kap:
         condition: service_healthy
@@ -183,6 +203,31 @@ networks:
     driver: bridge
 "#
     )
+}
+
+/// Detect the SSH agent socket path for Docker volume mounting.
+///
+/// On macOS, uses Docker Desktop's built-in SSH agent forwarding
+/// (`/run/host-services/ssh-auth.sock`) which avoids VM socket-sharing
+/// issues with bind-mounted host sockets. Requires the 1Password
+/// LaunchAgent or equivalent to set SSH_AUTH_SOCK globally so Docker
+/// Desktop picks it up.
+///
+/// On Linux, Docker runs natively so we bind-mount $SSH_AUTH_SOCK directly.
+pub fn detect_ssh_auth_sock() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        // Docker Desktop handles SSH forwarding internally — only mount if
+        // the host has an SSH agent running (the Docker-side path always
+        // exists inside the VM when Docker Desktop's SSH agent is enabled).
+        std::env::var("SSH_AUTH_SOCK")
+            .ok()
+            .filter(|p| !p.is_empty() && Path::new(p).exists())
+            .map(|_| "/run/host-services/ssh-auth.sock".to_string())
+    } else {
+        std::env::var("SSH_AUTH_SOCK")
+            .ok()
+            .filter(|p| !p.is_empty() && Path::new(p).exists())
+    }
 }
 
 /// Append kap-generated entries to .gitignore if not already present.
@@ -312,6 +357,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     let compose_config = ComposeConfig::default();
     let subnet_prefix = derive_subnet(project);
     let project_name = read_project_name(devcontainer_dir);
+    let ssh_auth_sock = detect_ssh_auth_sock();
     write_file(
         &overlay_path,
         &generate_overlay(
@@ -320,6 +366,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
             &detected_tool_names,
             &subnet_prefix,
             &project_name,
+            ssh_auth_sock.as_deref(),
         ),
     )?;
 
@@ -410,6 +457,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let subnet_prefix = derive_subnet(project);
     let detected = detect_cli_tools();
     let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
+    let ssh_auth_sock = detect_ssh_auth_sock();
     write_file(
         &devcontainer_dir.join(OVERLAY_FILENAME),
         &generate_overlay(
@@ -418,6 +466,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
             &detected_tool_names,
             &subnet_prefix,
             &project_name,
+            ssh_auth_sock.as_deref(),
         ),
     )?;
 
@@ -673,10 +722,6 @@ fn generate_app_compose(project_name: &str) -> String {
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     volumes:
       - ..:/workspaces/{project_name}:cached
-      # 1Password SSH agent (macOS). On Linux, use $SSH_AUTH_SOCK instead.
-      - ${{HOME}}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
-    environment:
-      SSH_AUTH_SOCK: /ssh-agent
     command: sleep infinity
 "#
     )
@@ -986,7 +1031,7 @@ mod tests {
                 target: Some("proxy".to_string()),
             }),
         };
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
         assert!(overlay.contains("build:"));
         assert!(overlay.contains("context: .."));
         assert!(overlay.contains("dockerfile: .devcontainer/Dockerfile"));
@@ -997,7 +1042,7 @@ mod tests {
     #[test]
     fn overlay_with_default_image() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
         assert!(!overlay.contains("build:"));
     }
@@ -1005,7 +1050,7 @@ mod tests {
     #[test]
     fn overlay_includes_proxy_logs_volume() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
         assert!(overlay.contains("proxy-logs:/var/log/kap"));
         assert!(overlay.contains("volumes:\n  proxy-logs:"));
     }
@@ -1077,7 +1122,7 @@ mod tests {
     #[test]
     fn overlay_uses_custom_subnet() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.25.42", "test-project");
+        let overlay = generate_overlay("app", &compose, &[], "172.25.42", "test-project", None);
         assert!(overlay.contains("172.25.42.2")); // app IP
         assert!(overlay.contains("172.25.42.3")); // sidecar IP
         assert!(overlay.contains("172.25.42.0/24")); // subnet
@@ -1157,7 +1202,7 @@ mod tests {
     fn overlay_inlines_cli_shim_via_configs() {
         let compose = ComposeConfig::default();
         let tools = vec!["gh".to_string(), "aws".to_string()];
-        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test");
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None);
         // Shim is inlined via Docker Compose configs, not a separate file
         assert!(overlay.contains("configs:\n  cli-shim:\n    content:"));
         assert!(overlay.contains("target: /usr/local/bin/gh"));
@@ -1171,8 +1216,48 @@ mod tests {
     #[test]
     fn overlay_contains_hostname() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project", None);
         assert!(overlay.contains("hostname: my-project"));
+    }
+
+    #[test]
+    fn overlay_includes_ssh_agent_when_set() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &[],
+            "172.28.0",
+            "test",
+            Some("/run/host-services/ssh-auth.sock"),
+        );
+        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
+        assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
+    }
+
+    #[test]
+    fn overlay_omits_ssh_agent_when_unset() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None);
+        assert!(!overlay.contains("ssh-agent"));
+        assert!(!overlay.contains("SSH_AUTH_SOCK"));
+    }
+
+    #[test]
+    fn overlay_includes_ssh_agent_and_cli_volumes() {
+        let compose = ComposeConfig::default();
+        let tools = vec!["gh".to_string()];
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &tools,
+            "172.28.0",
+            "test",
+            Some("/run/host-services/ssh-auth.sock"),
+        );
+        assert!(overlay.contains("kap-bin:/opt/kap:ro"));
+        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
+        assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {

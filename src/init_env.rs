@@ -116,12 +116,14 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     let project_dir = devcontainer_dir.parent().unwrap_or(devcontainer_dir);
     let subnet_prefix = crate::init::derive_subnet(project_dir);
     let project_name = crate::init::read_project_name(devcontainer_dir);
+    let ssh_auth_sock = crate::init::detect_ssh_auth_sock();
     let overlay = crate::init::generate_overlay(
         &service_name,
         &compose_config,
         &cli_tools,
         &subnet_prefix,
         &project_name,
+        ssh_auth_sock.as_deref(),
     );
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;

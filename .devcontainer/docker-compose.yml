@@ -12,10 +12,7 @@ services:
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
       - target-cache:/workspaces/kap/target
-      # 1Password SSH agent (macOS). On Linux, use $SSH_AUTH_SOCK instead.
-      - ${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:
-      SSH_AUTH_SOCK: /ssh-agent
       CLAUDE_CODE_OAUTH_TOKEN: ${DEVCONTAINER_CLAUDE_CODE_OAUTH_TOKEN:-}
     command: sleep infinity
 
