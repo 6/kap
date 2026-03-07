@@ -7,7 +7,7 @@ use hyper::{Request, Response, StatusCode};
 use serde::Serialize;
 
 use super::RemoteState;
-use crate::remote::containers;
+use crate::remote::{agent, containers};
 
 type Body = Full<Bytes>;
 
@@ -22,7 +22,27 @@ pub async fn handle(
         (&hyper::Method::GET, "/api/status") => handle_status(state).await,
         (&hyper::Method::GET, "/api/logs") => handle_logs(req, state).await,
         (&hyper::Method::GET, "/api/logs/denied") => handle_logs_denied(state).await,
-        (&hyper::Method::POST, p) if p.starts_with("/api/pair") => handle_pair(req, state).await,
+        (&hyper::Method::POST, "/api/pair") => handle_pair(req, state).await,
+        (&hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(state).await,
+        (&hyper::Method::GET, p) if p.starts_with("/api/agent/session/") => {
+            let rest = &p["/api/agent/session/".len()..];
+            if let Some(id) = rest.strip_suffix("/diff") {
+                handle_agent_diff(id, state).await
+            } else {
+                handle_agent_session(rest, state).await
+            }
+        }
+        (&hyper::Method::POST, p) if p.starts_with("/api/agent/session/") => {
+            let rest = &p["/api/agent/session/".len()..];
+            if let Some(id) = rest.strip_suffix("/cancel") {
+                handle_agent_cancel(id, state).await
+            } else {
+                Ok(json_response(
+                    StatusCode::NOT_FOUND,
+                    &ErrorBody { error: "not found" },
+                ))
+            }
+        }
         _ => Ok(json_response(
             StatusCode::NOT_FOUND,
             &ErrorBody { error: "not found" },
@@ -200,6 +220,137 @@ async fn handle_pair(
             device_id,
         },
     ))
+}
+
+async fn handle_agent_sessions(_state: &Arc<RemoteState>) -> Result<Response<Body>> {
+    let (app, _sidecar) = match containers::find_containers() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::OK,
+                &Vec::<agent::SessionInfo>::new(),
+            ));
+        }
+    };
+
+    let sessions = agent::discover_sessions(&app).unwrap_or_default();
+    Ok(json_response(StatusCode::OK, &sessions))
+}
+
+async fn handle_agent_session(
+    session_id: &str,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match containers::find_containers() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &ErrorBody {
+                    error: "no containers running",
+                },
+            ));
+        }
+    };
+
+    match agent::read_session(&app, session_id) {
+        Ok(events) => Ok(json_response(StatusCode::OK, &events)),
+        Err(e) => Ok(json_response(
+            StatusCode::NOT_FOUND,
+            &ErrorBodyOwned {
+                error: e.to_string(),
+            },
+        )),
+    }
+}
+
+async fn handle_agent_diff(session_id: &str, _state: &Arc<RemoteState>) -> Result<Response<Body>> {
+    let (app, _sidecar) = match containers::find_containers() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &ErrorBody {
+                    error: "no containers running",
+                },
+            ));
+        }
+    };
+
+    let _ = session_id; // diff is repo-wide, not session-specific
+    match agent::get_diff(&app) {
+        Ok(diff) => Ok(json_response(StatusCode::OK, &DiffResponse { diff })),
+        Err(e) => Ok(json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &ErrorBodyOwned {
+                error: e.to_string(),
+            },
+        )),
+    }
+}
+
+#[derive(Serialize)]
+struct DiffResponse {
+    diff: String,
+}
+
+async fn handle_agent_cancel(
+    session_id: &str,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match containers::find_containers() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &ErrorBody {
+                    error: "no containers running",
+                },
+            ));
+        }
+    };
+
+    let _ = session_id; // cancel kills any running claude process
+    let pid = agent::is_agent_running(&app);
+    match pid {
+        Some(_) => {
+            let exit = containers::exec_exit_code(&app, &["pkill", "-INT", "-f", "claude"]);
+            if exit == 0 {
+                Ok(json_response(
+                    StatusCode::OK,
+                    &CancelResponse {
+                        cancelled: true,
+                        message: "SIGINT sent to agent",
+                    },
+                ))
+            } else {
+                Ok(json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &ErrorBody {
+                        error: "failed to send signal",
+                    },
+                ))
+            }
+        }
+        None => Ok(json_response(
+            StatusCode::OK,
+            &CancelResponse {
+                cancelled: false,
+                message: "no agent process running",
+            },
+        )),
+    }
+}
+
+#[derive(Serialize)]
+struct CancelResponse {
+    cancelled: bool,
+    message: &'static str,
+}
+
+#[derive(Serialize)]
+struct ErrorBodyOwned {
+    error: String,
 }
 
 fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response<Body> {
