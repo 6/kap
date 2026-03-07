@@ -104,6 +104,25 @@ pub fn exec(cmd: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// List all running devcontainers.
+pub fn list() -> Result<()> {
+    let groups = crate::remote::containers::find_all_containers()?;
+    if groups.is_empty() {
+        println!("No running devcontainers.");
+        return Ok(());
+    }
+    for g in &groups {
+        let healthy =
+            crate::remote::containers::exec_exit_code(&g.sidecar, &["devg", "check", "--proxy"])
+                == 0;
+        let status = if healthy { "healthy" } else { "unhealthy" };
+        println!("\x1b[1m{}\x1b[0m  {}", g.project, status);
+        println!("  app:     {}", g.app);
+        println!("  sidecar: {}", g.sidecar);
+    }
+    Ok(())
+}
+
 /// Check that `devcontainer` CLI is installed.
 fn require_devcontainer() -> Result<()> {
     match Command::new("which")

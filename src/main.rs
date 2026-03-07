@@ -65,6 +65,8 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
+    /// List running devcontainers
+    List,
     /// Check proxy health (for container healthcheck)
     Check {
         /// Only check proxy health (for container healthcheck)
@@ -230,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Up { reset } => container::up(reset),
         Command::Down { volumes } => container::down(volumes),
         Command::Exec { cmd } => container::exec(cmd),
+        Command::List => container::list(),
         Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
