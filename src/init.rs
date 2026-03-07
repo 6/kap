@@ -474,7 +474,13 @@ const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
     },
     DomainGroup {
         label: "Rust",
-        domains: &["crates.io", "*.crates.io", "rustup.rs", "*.rust-lang.org"],
+        domains: &[
+            "crates.io",
+            "*.crates.io",
+            "rustup.rs",
+            "*.rustup.rs",
+            "*.rust-lang.org",
+        ],
     },
     DomainGroup {
         label: "Python",
