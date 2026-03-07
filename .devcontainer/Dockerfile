@@ -34,6 +34,8 @@ RUN userdel -r ubuntu 2>/dev/null; \
     && useradd -u 1000 -g 1000 -m -s /bin/zsh vscode \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER vscode
+# Simple zsh prompt
+RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > /home/vscode/.zshrc
 # Install Rust toolchain for development
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     --default-toolchain stable \

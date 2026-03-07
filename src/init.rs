@@ -83,6 +83,7 @@ services:
       - ${{HOME}}/.devg/auth:/etc/devg/auth
       - proxy-logs:/var/log/devg
       - devg-bin:/opt/devg
+      - ..:/workspace:ro
     entrypoint: ["sh", "-c", "cp /usr/local/bin/devg /opt/devg/devg && exec devg proxy"]
     env_file:
       - path: .env

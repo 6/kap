@@ -108,6 +108,12 @@ async fn handle_request(
         return Ok(error_response(400, "empty args"));
     }
 
+    // Map the app container's workspace path to /workspace on the sidecar
+    let cwd = parsed["cwd"]
+        .as_str()
+        .map(map_workspace_path)
+        .unwrap_or_else(|| "/workspace".to_string());
+
     let cmd_display = args.join(" ");
     let log_target = format!("cli/{tool_name}");
 
@@ -127,6 +133,7 @@ async fn handle_request(
     // Spawn the tool with only the configured env vars from the sidecar env
     let mut cmd = tokio::process::Command::new(&tool_name);
     cmd.args(&args);
+    cmd.current_dir(&cwd);
     cmd.env_clear();
     // Pass through PATH so the binary can be found
     if let Ok(path) = std::env::var("PATH") {
@@ -178,6 +185,19 @@ async fn handle_request(
             ))
         }
     }
+}
+
+/// Map app container paths like /workspaces/project/subdir to /workspace/subdir.
+/// The sidecar mounts the project root at /workspace.
+fn map_workspace_path(path: &str) -> String {
+    // /workspaces/<project>/subdir -> /workspace/subdir
+    if let Some(rest) = path.strip_prefix("/workspaces/") {
+        if let Some(pos) = rest.find('/') {
+            return format!("/workspace{}", &rest[pos..]);
+        }
+        return "/workspace".to_string();
+    }
+    "/workspace".to_string()
 }
 
 fn error_response(status: u16, message: &str) -> Response<Full<Bytes>> {

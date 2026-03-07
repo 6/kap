@@ -12,10 +12,16 @@ pub async fn run(tool: &str, args: &[String]) -> Result<()> {
     let url = format!("http://{DEVG_HOST}:{DEVG_CLI_PORT}/{tool}");
 
     // Bypass HTTP_PROXY - talk directly to the sidecar on the internal network
+    // Send current directory so sidecar can cd into the workspace
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_default();
+
     let client = reqwest::Client::builder().no_proxy().build()?;
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({"args": args}))
+        .json(&serde_json::json!({"args": args, "cwd": cwd}))
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await?;
