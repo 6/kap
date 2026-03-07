@@ -1,5 +1,10 @@
 # kap.toml — network and tool policy for this devcontainer
 
+# Forward host SSH agent into the container (for git over SSH, commit signing, etc.)
+# On macOS, uses Docker Desktop's built-in SSH forwarding.
+# On Linux, bind-mounts $SSH_AUTH_SOCK directly.
+ssh_agent = true
+
 [proxy.network]
 # Domains the container can reach. Wildcards supported (*.example.com).
 # Everything else is blocked — both HTTP/HTTPS and DNS.

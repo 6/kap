@@ -5,11 +5,18 @@ use std::path::Path;
 
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct Config {
+    /// Forward the host SSH agent into the container (default: true).
+    #[serde(default = "default_true")]
+    pub ssh_agent: bool,
     #[serde(default)]
     pub proxy: ProxyConfig,
     pub mcp: Option<McpConfig>,
     pub compose: Option<ComposeConfig>,
     pub cli: Option<CliConfig>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -246,9 +253,16 @@ log = "/tmp/test.jsonl"
     #[test]
     fn parse_empty_defaults() {
         let config: Config = toml::from_str("").unwrap();
+        assert!(config.ssh_agent); // defaults to true
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
         assert!(config.proxy.network.allow.is_empty());
         assert!(config.proxy.network.deny.is_empty());
+    }
+
+    #[test]
+    fn ssh_agent_can_be_disabled() {
+        let config: Config = toml::from_str("ssh_agent = false").unwrap();
+        assert!(!config.ssh_agent);
     }
 
     #[test]
