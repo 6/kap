@@ -47,7 +47,9 @@ Every code change must include unit tests. Run `cargo test` before committing.
 
 After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint warnings and formatting drift. Fix all warnings before committing.
 
-Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all layers (domain proxy, DNS forwarder, MCP proxy, gh proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
+Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all layers (domain proxy, DNS forwarder, MCP proxy, CLI proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
+
+**Do NOT use `docker compose up` directly** to manage devcontainers. Always use `devcontainer up --workspace-folder .` (and `--remove-existing-container` to force recreation). The devcontainer CLI adds labels that `devcontainer exec` needs to find containers. Manual `docker compose up` strips these labels and breaks `devcontainer exec`.
 
 ## Compose overlay
 
