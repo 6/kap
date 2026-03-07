@@ -117,7 +117,7 @@ The daemon runs on the host. All API endpoints require a bearer token issued dur
 
 ## How it works
 
-`kap up` starts two containers on an internal Docker network: your app container (isolated, no internet) and a kap sidecar (controls all outbound access). The sidecar image defaults to `ghcr.io/6/kap:latest`.
+`kap up` starts two containers on an internal Docker network: your app container (isolated, no internet) and a kap sidecar (controls all outbound access). The sidecar pulls from `ghcr.io/6/kap:latest` by default, or set `[compose] build` in `kap.toml` to build from source.
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -141,12 +141,10 @@ The daemon runs on the host. All API endpoints require a bearer token issued dur
 └──────────────────────────────────────────────────┘
 ```
 
-- The app container has **no external network route**. All traffic goes through the sidecar.
+- The app container has **no external network route** (Docker `internal: true`, no default gateway). All traffic goes through the sidecar.
 - DNS queries only resolve allowed domains. Disallowed domains get NXDOMAIN.
 - Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
 - **Credentials never enter the app container.** OAuth tokens, API keys, and GH_TOKEN live on the sidecar only.
-
-The sidecar is added via a generated compose overlay (`docker-compose.kap.yml`), regenerated on every `kap up`. To build from source instead of pulling the image, add `[compose] build = { ... }` to `kap.toml`.
 
 ## Security model
 
