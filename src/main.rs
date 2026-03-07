@@ -1,5 +1,6 @@
 mod check;
 mod config;
+mod doctor;
 mod init;
 mod init_env;
 mod mcp;
@@ -56,6 +57,8 @@ enum Command {
         #[arg(short, long, default_value = ".")]
         project_dir: String,
     },
+    /// Verify devcontainer-guard is configured correctly (run from app container)
+    Doctor,
     /// Authenticate with a remote MCP server (OAuth 2.1)
     Auth {
         /// Name for this MCP server (used in config and token storage)
@@ -102,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Init { project_dir } => init::run(&project_dir),
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
+        Command::Doctor => doctor::run(),
         Command::Check { proxy } => check::run(proxy).await,
         Command::WhyDenied { tail, log } => proxy::log::why_denied(&log, tail).await,
         Command::Auth {

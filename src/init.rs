@@ -73,7 +73,14 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
         "docker-compose.devg.yml".to_string(),
     ));
     dc_obj["dockerComposeFile"] = serde_json::Value::Array(all_compose);
-    dc_obj["initializeCommand"] = serde_json::Value::String("devg init-env".to_string());
+
+    let mut notes: Vec<String> = Vec::new();
+
+    if dc_obj.get("initializeCommand").is_some() {
+        notes.push("initializeCommand already set. Add `devg init-env` to your existing command.".to_string());
+    } else {
+        dc_obj["initializeCommand"] = serde_json::Value::String("devg init-env".to_string());
+    }
 
     let updated = serde_json::to_string_pretty(&dc_obj)?;
     write_file(&devcontainer_json_path, &format!("{updated}\n"))?;
@@ -82,8 +89,16 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     println!("Created .devcontainer/devg.toml");
     println!("Created .devcontainer/docker-compose.devg.yml");
     println!("Updated .devcontainer/devcontainer.json");
+
+    for note in &notes {
+        println!();
+        println!("  NOTE: {note}");
+    }
+
     println!();
-    println!("Next: devcontainer up --workspace-folder .");
+    println!("Next:");
+    println!("  devcontainer up --workspace-folder .");
+    println!("  devg doctor   # verify everything is wired correctly");
 
     Ok(())
 }
