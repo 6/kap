@@ -655,12 +655,10 @@ allow = [
 # deny = ["gist.github.com"]
 
 # --- MCP servers (tool-level filtering for remote MCP) ---
-# Register with `kap mcp add <url>`, then configure:
+# Register with `kap mcp add <url>`, then restrict tools:
 # [mcp]
 # [[mcp.servers]]
 # name = "github"
-# upstream = "https://api.githubcopilot.com/mcp/"
-# token_env = "GH_TOKEN"
 # allow_tools = ["get_pull_request", "list_issues"]
 {cli_section}"#
     )
