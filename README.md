@@ -11,12 +11,9 @@ Run AI agents in secure capsules. Built on devcontainers with network controls a
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS/Windows, or Docker Engine on Linux)
-- [devcontainer CLI](https://github.com/devcontainers/cli) — `npm install -g @devcontainers/cli` or `brew install devcontainer` on macOS
-
 ## Quick start
+
+Requires [Docker](https://docs.docker.com/get-docker/) (or Colima, OrbStack, etc.) and the [devcontainer CLI](https://github.com/devcontainers/cli) (`npm install -g @devcontainers/cli`).
 
 ```bash
 cargo install kap
