@@ -3,13 +3,10 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-devcontainer-guard (`devg`) controls what a devcontainer can reach and what tools an AI agent can use. It runs as a proxy sidecar with three layers:
+Network and MCP access control for devcontainers. Runs as a sidecar that enforces:
 
-1. **Domain proxy**: allowlist of domains the container can talk to
-2. **DNS forwarder**: only resolves allowed domains, blocks DNS exfiltration
-3. **MCP proxy**: allowlist of MCP tools an agent can call, with credential isolation
-
-For HTTPS, the domain proxy sees `CONNECT domain:443` but doesn't inspect inside the TLS tunnel (no MITM). The MCP proxy inspects Streamable HTTP JSON-RPC to filter tools.
+- **Domain allowlist** - only approved domains are reachable from the container
+- **MCP tool allowlist** - only approved tools are callable by AI agents, with credential isolation
 
 ## Quick start
 
