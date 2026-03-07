@@ -123,11 +123,13 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 
 | Command | Where it runs | Purpose |
 |---------|--------------|---------|
-| `devg proxy` | Proxy sidecar | Domain proxy + MCP proxy (if `[mcp]` in config) |
+| `devg init` | Host | Scaffold devg into a project |
+| `devg init-env` | Host | Generate .env with credentials (runs as initializeCommand) |
+| `devg status` | Host | Check if everything is wired correctly |
+| `devg why-denied` | Host | Show denied requests from the proxy log |
 | `devg auth <name> --upstream <url>` | Host | OAuth 2.1 setup for an MCP server |
-| `devg init` | Anywhere | Scaffolds `.devcontainer/` files (3 files) |
-| `devg check` | Proxy sidecar | Proxy health check (used by Docker healthcheck) |
-| `devg why-denied` | App container | Shows denied requests from the proxy log |
+| `devg proxy` | Proxy sidecar | Domain proxy + DNS forwarder + MCP proxy (internal) |
+| `devg check` | Proxy sidecar | Health check (internal, used by Docker healthcheck) |
 
 ## Development
 
