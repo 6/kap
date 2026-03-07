@@ -181,13 +181,9 @@ fn build_tls_config(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfi
 
 /// Print the pairing QR code.
 pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
-    let (_, _, fingerprint) = auth::load_or_generate_tls(data_dir)?;
     let token = auth::load_or_generate_pairing_token(data_dir)?;
-
     let ip = auth::local_ip().unwrap_or_else(|| "localhost".to_string());
-    // Truncate fingerprint to first 16 hex chars (64 bits) to keep QR small
-    let short_fp = &fingerprint[..16.min(fingerprint.len())];
-    let url = format!("devg://{ip}:{port}:{token}:{short_fp}");
+    let url = format!("devg://{ip}:{port}:{token}");
 
     auth::print_qr(&url);
     Ok(())
