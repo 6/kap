@@ -35,31 +35,25 @@ pub fn run() -> Result<()> {
     let config = load_local_config();
     print_config_summary(&config);
 
-    let (app, sidecar) = match std::env::current_dir()
+    let current_project = std::env::current_dir()
         .ok()
-        .and_then(|cwd| crate::container::find_compose_project(&cwd))
-    {
-        Some(project) => find_by_project(&project)?,
+        .and_then(|cwd| crate::container::find_compose_project(&cwd));
+    let (app, sidecar) = match &current_project {
+        Some(project) => find_by_project(project)?,
         None => find_containers()?,
     };
     let proxy_ip = proxy_ip(&app);
 
-    // Warn if other kap projects are also running (can cause confusion)
-    if let Ok(all) = find_all_containers()
-        && all.len() > 1
+    // Warn about duplicate containers for the same project (stale leftovers)
+    if let Some(project) = &current_project
+        && let Ok(all) = find_all_containers()
     {
-        let others: Vec<&str> = all
-            .iter()
-            .filter(|g| g.app != app)
-            .map(|g| g.project.as_str())
-            .collect();
-        if !others.is_empty() {
+        let dupes: usize = all.iter().filter(|g| g.project == *project).count();
+        if dupes > 1 {
             println!(
-                "  \x1b[33m!\x1b[0m  {} other project(s) also running: {}",
-                others.len(),
-                others.join(", ")
+                "  \x1b[33m!\x1b[0m  {dupes} containers found for project {project} (expected 1)"
             );
-            println!("     stop with: kap down <project>");
+            println!("     try: kap up --reset");
             println!();
         }
     }

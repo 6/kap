@@ -33,6 +33,24 @@ fn confirm(prompt: &str) -> bool {
     input.is_empty() || input == "y" || input == "yes"
 }
 
+/// Read the project name from devcontainer.json's "name" field.
+/// Falls back to the parent directory name.
+pub fn read_project_name(devcontainer_dir: &Path) -> String {
+    let path = devcontainer_dir.join("devcontainer.json");
+    if let Ok(content) = std::fs::read_to_string(&path)
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+        && let Some(name) = json["name"].as_str()
+    {
+        return name.to_string();
+    }
+    // Fall back to parent directory name
+    devcontainer_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "dev".to_string())
+}
+
 /// Read the service name from devcontainer.json. Defaults to "app".
 pub fn read_service_name(devcontainer_dir: &Path) -> Result<String> {
     let path = devcontainer_dir.join("devcontainer.json");
@@ -68,6 +86,7 @@ pub fn generate_overlay(
     compose: &ComposeConfig,
     cli_tools: &[String],
     subnet_prefix: &str,
+    project_name: &str,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
     let cli_volumes = if cli_tools.is_empty() {
@@ -92,6 +111,7 @@ pub fn generate_overlay(
 services:
   # Adds proxy env vars and DNS to your existing service
   {service_name}:
+    hostname: {project_name}
     environment:
       # Use static IP because app DNS goes through kap (hostnames won't resolve)
       HTTP_PROXY: http://{sidecar_ip}:3128
@@ -267,35 +287,42 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()
     };
 
     // Write kap.toml (auto-detects CLI tools like gh)
-    let config_content = generate_config(DEFAULT_DOMAINS);
+    let config_content = generate_config();
     write_file(&kap_toml_path, &config_content)?;
 
-    // Parse back to get detected CLI tools for the overlay
-    let detected_tools: Vec<String> = detect_cli_tools()
-        .iter()
-        .map(|t| t.name.to_string())
-        .collect();
+    // Detect CLI tools for overlay and .env
+    let detected = detect_cli_tools();
+    let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
 
     // Generate overlay (using default ComposeConfig — user can customize in kap.toml later)
     let overlay_path = devcontainer_dir.join(OVERLAY_FILENAME);
     let compose_config = ComposeConfig::default();
     let subnet_prefix = derive_subnet(project);
+    let project_name = read_project_name(devcontainer_dir);
     write_file(
         &overlay_path,
         &generate_overlay(
             &service_name,
             &compose_config,
-            &detected_tools,
+            &detected_tool_names,
             &subnet_prefix,
+            &project_name,
         ),
     )?;
+
+    // Write .env with shell patterns for detected CLI tools (only if it doesn't exist)
+    let env_path = devcontainer_dir.join(".env");
+    if !env_path.exists() {
+        let env_content = generate_env_file(&detected);
+        write_file(&env_path, &env_content)?;
+    }
 
     // Update devcontainer.json
     let mut dc_obj = dc_json.clone();
 
     // Remove image field (now in docker-compose.yml)
     if image_based {
-        dc_obj.as_object_mut().unwrap().remove("image");
+        dc_obj.as_object_mut().unwrap().shift_remove("image");
     }
 
     let mut all_compose: Vec<serde_json::Value> = compose_files
@@ -351,10 +378,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "my-project".to_string());
 
-    write_file(
-        &devcontainer_dir.join("kap.toml"),
-        &generate_config(DEFAULT_DOMAINS),
-    )?;
+    write_file(&devcontainer_dir.join("kap.toml"), &generate_config())?;
     write_file(
         &devcontainer_dir.join("docker-compose.yml"),
         &generate_app_compose(&project_name),
@@ -367,14 +391,22 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     // Generate the overlay so things work immediately
     let compose_config = ComposeConfig::default();
     let subnet_prefix = derive_subnet(project);
-    let detected_tools: Vec<String> = detect_cli_tools()
-        .iter()
-        .map(|t| t.name.to_string())
-        .collect();
+    let detected = detect_cli_tools();
+    let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
     write_file(
         &devcontainer_dir.join(OVERLAY_FILENAME),
-        &generate_overlay("app", &compose_config, &detected_tools, &subnet_prefix),
+        &generate_overlay(
+            "app",
+            &compose_config,
+            &detected_tool_names,
+            &subnet_prefix,
+            &project_name,
+        ),
     )?;
+
+    // Write .env with shell patterns for detected CLI tools
+    let env_content = generate_env_file(&detected);
+    write_file(&devcontainer_dir.join(".env"), &env_content)?;
 
     // Add overlay to .gitignore
     gitignore_overlay(project)?;
@@ -392,70 +424,103 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const DEFAULT_DOMAINS: &[&str] = &[
-    // GitHub
-    "github.com",
-    "*.github.com",
-    "*.githubusercontent.com",
-    // AI
-    "anthropic.com",
-    "*.anthropic.com",
-    "claude.ai",
-    "*.claude.ai",
-    "claude.com",
-    "*.claude.com",
-    "openai.com",
-    "*.openai.com",
-    "generativelanguage.googleapis.com",
-    // APT
-    "*.ubuntu.com",
-    "*.debian.org",
-    // Ruby
-    "rubygems.org",
-    "*.rubygems.org",
-    "bundler.io",
-    "*.ruby-lang.org",
-    "rubyonrails.org",
-    "*.rubyonrails.org",
-    // Node
-    "*.npmjs.org",
-    "*.npmjs.com",
-    "nodejs.org",
-    "*.yarnpkg.com",
-    // Rust
-    "crates.io",
-    "*.crates.io",
-    "rustup.rs",
-    "*.rust-lang.org",
-    // Python
-    "pypi.org",
-    "*.pypi.org",
-    "*.pythonhosted.org",
-    // Go
-    "proxy.golang.org",
-    "sum.golang.org",
-    "storage.googleapis.com",
-    // Java
-    "repo.maven.apache.org",
-    "*.maven.org",
-    "plugins.gradle.org",
-    "services.gradle.org",
-    "downloads.gradle-dn.com",
-    // CocoaPods
-    "cocoapods.org",
-    "*.cocoapods.org",
+struct DomainGroup {
+    label: &'static str,
+    domains: &'static [&'static str],
+}
+
+const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
+    DomainGroup {
+        label: "GitHub",
+        domains: &["github.com", "*.github.com", "*.githubusercontent.com"],
+    },
+    DomainGroup {
+        label: "AI providers",
+        domains: &[
+            "anthropic.com",
+            "*.anthropic.com",
+            "claude.ai",
+            "*.claude.ai",
+            "claude.com",
+            "*.claude.com",
+            "openai.com",
+            "*.openai.com",
+            "generativelanguage.googleapis.com",
+            "storage.googleapis.com",
+        ],
+    },
+    DomainGroup {
+        label: "APT",
+        domains: &["*.ubuntu.com", "*.debian.org"],
+    },
+    DomainGroup {
+        label: "Dev tools",
+        domains: &["mise.jdx.dev"],
+    },
+    DomainGroup {
+        label: "Ruby",
+        domains: &[
+            "rubygems.org",
+            "*.rubygems.org",
+            "bundler.io",
+            "*.ruby-lang.org",
+            "rubyonrails.org",
+            "*.rubyonrails.org",
+        ],
+    },
+    DomainGroup {
+        label: "Node",
+        domains: &["*.npmjs.org", "*.npmjs.com", "nodejs.org", "*.yarnpkg.com"],
+    },
+    DomainGroup {
+        label: "Rust",
+        domains: &["crates.io", "*.crates.io", "rustup.rs", "*.rust-lang.org"],
+    },
+    DomainGroup {
+        label: "Python",
+        domains: &["pypi.org", "*.pypi.org", "*.pythonhosted.org"],
+    },
+    DomainGroup {
+        label: "Go",
+        domains: &["proxy.golang.org", "sum.golang.org"],
+    },
+    DomainGroup {
+        label: "Java",
+        domains: &[
+            "repo.maven.apache.org",
+            "*.maven.org",
+            "plugins.gradle.org",
+            "services.gradle.org",
+            "downloads.gradle-dn.com",
+        ],
+    },
+    DomainGroup {
+        label: "CocoaPods",
+        domains: &["cocoapods.org", "*.cocoapods.org"],
+    },
 ];
+
+#[cfg(test)]
+fn all_default_domains() -> Vec<&'static str> {
+    DEFAULT_DOMAIN_GROUPS
+        .iter()
+        .flat_map(|g| g.domains.iter().copied())
+        .collect()
+}
 
 struct DetectedTool {
     name: &'static str,
     env: &'static [&'static str],
     allow: &'static [&'static str],
+    /// Default shell expressions for env vars (written to .env during init).
+    env_defaults: &'static [(&'static str, &'static str)],
 }
 
 const DETECTABLE_TOOLS: &[DetectedTool] = &[DetectedTool {
     name: "gh",
     env: &["GH_TOKEN"],
     allow: &["*"],
+    env_defaults: &[("GH_TOKEN", "$(gh auth token)")],
 }];
 
 fn detect_cli_tools() -> Vec<&'static DetectedTool> {
@@ -472,16 +537,37 @@ fn detect_cli_tools() -> Vec<&'static DetectedTool> {
         .collect()
 }
 
-fn generate_config(domains: &[&str]) -> String {
-    let allow_toml = domains
-        .iter()
-        .map(|d| format!("  \"{d}\""))
-        .collect::<Vec<_>>()
-        .join(",\n");
+fn generate_config() -> String {
+    // Build allow list with category comments
+    let mut allow_lines: Vec<String> = Vec::new();
+    for (i, group) in DEFAULT_DOMAIN_GROUPS.iter().enumerate() {
+        if i > 0 {
+            allow_lines.push(String::new()); // blank line between groups
+        }
+        allow_lines.push(format!("  # {}", group.label));
+        for (j, domain) in group.domains.iter().enumerate() {
+            let comma = if i == DEFAULT_DOMAIN_GROUPS.len() - 1 && j == group.domains.len() - 1 {
+                "" // no trailing comma on last entry
+            } else {
+                ","
+            };
+            allow_lines.push(format!("  \"{domain}\"{comma}"));
+        }
+    }
+    let allow_toml = allow_lines.join("\n");
 
     let detected = detect_cli_tools();
     let cli_section = if detected.is_empty() {
-        String::new()
+        r#"
+# --- CLI tool proxying (credentials stay on sidecar, never enter app container) ---
+# Uncomment to proxy a CLI tool:
+# [cli]
+# [[cli.tools]]
+# name = "gh"
+# env = ["GH_TOKEN"]
+# allow = ["*"]
+"#
+        .to_string()
     } else {
         let tools: Vec<String> = detected
             .iter()
@@ -504,18 +590,32 @@ fn generate_config(domains: &[&str]) -> String {
                 )
             })
             .collect();
-        format!("\n[cli]{}\n", tools.join("\n"))
+        format!(
+            "\n# --- CLI tool proxying (credentials stay on sidecar, never enter app container) ---\n[cli]{}\n",
+            tools.join("\n")
+        )
     };
 
     format!(
-        r#"# kap.toml: kap configuration
+        r#"# kap.toml — network and tool policy for this devcontainer
 
 [proxy.network]
+# Domains the container can reach. Wildcards supported (*.example.com).
+# Everything else is blocked — both HTTP/HTTPS and DNS.
 allow = [
-{allow_toml},
+{allow_toml}
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
+
+# --- MCP servers (tool-level filtering for remote MCP) ---
+# Register with `kap mcp add <url>`, then configure:
+# [mcp]
+# [[mcp.servers]]
+# name = "github"
+# upstream = "https://api.githubcopilot.com/mcp/"
+# token_env = "GH_TOKEN"
+# allow_tools = ["get_pull_request", "list_issues"]
 {cli_section}"#
     )
 }
@@ -552,6 +652,16 @@ fn generate_devcontainer_json(project_name: &str) -> String {
     )
 }
 
+fn generate_env_file(detected: &[&DetectedTool]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for tool in detected {
+        for (var, expr) in tool.env_defaults {
+            lines.push(format!("{var}={expr}"));
+        }
+    }
+    lines.join("\n")
+}
+
 fn write_file(path: &Path, content: &str) -> Result<()> {
     std::fs::write(path, content).with_context(|| format!("writing {}", path.display()))
 }
@@ -563,7 +673,7 @@ mod tests {
 
     #[test]
     fn default_domains_covers_all_ecosystems() {
-        let domains = DEFAULT_DOMAINS;
+        let domains = all_default_domains();
         assert!(domains.contains(&"github.com"));
         assert!(domains.contains(&"anthropic.com"));
         assert!(domains.contains(&"crates.io"));
@@ -573,6 +683,24 @@ mod tests {
         assert!(domains.contains(&"rubygems.org"));
         assert!(domains.contains(&"cocoapods.org"));
         assert!(domains.contains(&"repo.maven.apache.org"));
+        assert!(domains.contains(&"mise.jdx.dev"));
+    }
+
+    #[test]
+    fn generate_config_has_category_comments() {
+        let config = generate_config();
+        assert!(config.contains("# GitHub"));
+        assert!(config.contains("# AI providers"));
+        assert!(config.contains("# APT"));
+        assert!(config.contains("# Dev tools"));
+        assert!(config.contains("# Ruby"));
+        assert!(config.contains("# Node"));
+        assert!(config.contains("# Rust"));
+        assert!(config.contains("# Python"));
+        assert!(config.contains("# Go"));
+        assert!(config.contains("# Java"));
+        assert!(config.contains("# CocoaPods"));
+        assert!(config.contains("# --- MCP servers"));
     }
 
     #[test]
@@ -610,6 +738,9 @@ mod tests {
         // .gitignore should contain overlay
         let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert!(gitignore.contains(OVERLAY_FILENAME));
+
+        // .env should be created
+        assert!(dc.join(".env").exists());
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -718,9 +849,11 @@ mod tests {
         let dir = tempdir("scaffold-image-based");
         let dc = dir.join(".devcontainer");
         fs::create_dir_all(&dc).unwrap();
+        // Use multiple keys after "image" to verify shift_remove preserves order
+        // (swap_remove would move remoteUser into image's position, before postCreateCommand)
         fs::write(
             dc.join("devcontainer.json"),
-            r#"{"name": "test", "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04", "remoteUser": "vscode"}"#,
+            r#"{"name": "test", "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04", "postCreateCommand": "echo hi", "remoteUser": "vscode"}"#,
         )
         .unwrap();
 
@@ -743,11 +876,17 @@ mod tests {
         assert_eq!(compose_arr[0], "docker-compose.yml");
         assert_eq!(compose_arr[1], OVERLAY_FILENAME);
 
-        // Key order should be preserved (name should still be first)
+        // Key order should be preserved: shift_remove keeps postCreateCommand before remoteUser
         let raw = fs::read_to_string(dc.join("devcontainer.json")).unwrap();
         let name_pos = raw.find("\"name\"").unwrap();
         let service_pos = raw.find("\"service\"").unwrap();
         assert!(name_pos < service_pos);
+        let post_create_pos = raw.find("\"postCreateCommand\"").unwrap();
+        let remote_user_pos = raw.find("\"remoteUser\"").unwrap();
+        assert!(
+            post_create_pos < remote_user_pos,
+            "postCreateCommand should stay before remoteUser (shift_remove preserves order)"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -762,7 +901,7 @@ mod tests {
                 target: Some("proxy".to_string()),
             }),
         };
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
         assert!(overlay.contains("build:"));
         assert!(overlay.contains("context: .."));
         assert!(overlay.contains("dockerfile: .devcontainer/Dockerfile"));
@@ -773,7 +912,7 @@ mod tests {
     #[test]
     fn overlay_with_default_image() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
         assert!(!overlay.contains("build:"));
     }
@@ -781,7 +920,7 @@ mod tests {
     #[test]
     fn overlay_includes_proxy_logs_volume() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0");
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project");
         assert!(overlay.contains("proxy-logs:/var/log/kap"));
         assert!(overlay.contains("volumes:\n  proxy-logs:"));
     }
@@ -853,11 +992,76 @@ mod tests {
     #[test]
     fn overlay_uses_custom_subnet() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.25.42");
+        let overlay = generate_overlay("app", &compose, &[], "172.25.42", "test-project");
         assert!(overlay.contains("172.25.42.2")); // app IP
         assert!(overlay.contains("172.25.42.3")); // sidecar IP
         assert!(overlay.contains("172.25.42.0/24")); // subnet
         assert!(!overlay.contains("172.28.0")); // no old default
+        assert!(overlay.contains("hostname: test-project"));
+    }
+
+    #[test]
+    fn read_project_name_from_devcontainer_json() {
+        let dir = tempdir("project-name");
+        fs::write(
+            dir.join("devcontainer.json"),
+            r#"{"name": "my-cool-project"}"#,
+        )
+        .unwrap();
+        assert_eq!(read_project_name(&dir), "my-cool-project");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_project_name_falls_back_to_dir_name() {
+        let dir = tempdir("project-name-fallback");
+        // No devcontainer.json — should fall back to parent dir name
+        assert_eq!(
+            read_project_name(&dir),
+            dir.parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_project_name_no_name_field() {
+        let dir = tempdir("project-name-nofield");
+        fs::write(dir.join("devcontainer.json"), r#"{"service": "app"}"#).unwrap();
+        // Falls back to directory name since "name" field is missing
+        let name = read_project_name(&dir);
+        assert!(!name.is_empty());
+        assert_ne!(name, "dev"); // should get the actual dir name, not the hardcoded fallback
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn generate_env_file_with_detected_tools() {
+        let tool = DetectedTool {
+            name: "gh",
+            env: &["GH_TOKEN"],
+            allow: &["*"],
+            env_defaults: &[("GH_TOKEN", "$(gh auth token)")],
+        };
+        let content = generate_env_file(&[&tool]);
+        assert_eq!(content, "GH_TOKEN=$(gh auth token)");
+    }
+
+    #[test]
+    fn generate_env_file_empty_when_no_tools() {
+        let content = generate_env_file(&[]);
+        assert_eq!(content, "");
+    }
+
+    #[test]
+    fn overlay_contains_hostname() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project");
+        assert!(overlay.contains("hostname: my-project"));
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {
