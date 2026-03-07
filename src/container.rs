@@ -1,4 +1,4 @@
-/// Wrapper commands for devcontainer lifecycle: up, down, exec.
+/// Wrapper commands for devcontainer lifecycle: up, down, exec, list.
 ///
 /// Shells out to `devcontainer` CLI and `docker compose` so users
 /// only need one tool (`devg`) for everything.
@@ -40,16 +40,8 @@ pub fn up(reset: bool) -> Result<()> {
 }
 
 /// Stop and remove the devcontainer.
-pub fn down(volumes: bool) -> Result<()> {
-    let workspace = workspace_folder()?;
-    let project = find_compose_project(&workspace)
-        .or_else(|| derive_compose_project(&workspace))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "could not determine compose project name for {}",
-                workspace.display()
-            )
-        })?;
+pub fn down(project: Option<String>, volumes: bool) -> Result<()> {
+    let project = resolve_project(project)?;
 
     let mut cmd = Command::new("docker");
     cmd.args(["compose", "-p", &project, "down"]);
@@ -73,9 +65,13 @@ pub fn down(volumes: bool) -> Result<()> {
 }
 
 /// Run a command in the devcontainer (default: interactive shell).
-pub fn exec(cmd: Vec<String>) -> Result<()> {
+pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
     require_devcontainer()?;
-    let workspace = workspace_folder()?;
+
+    let workspace = match &project {
+        Some(name) => resolve_workspace(name)?,
+        None => workspace_folder()?,
+    };
 
     let shell_cmd = if cmd.is_empty() {
         vec!["/bin/bash".to_string()]
@@ -121,6 +117,76 @@ pub fn list() -> Result<()> {
         println!("  sidecar: {}", g.sidecar);
     }
     Ok(())
+}
+
+/// Resolve project name: if given, validate it exists; if not, derive from CWD.
+fn resolve_project(project: Option<String>) -> Result<String> {
+    match project {
+        Some(name) => {
+            // Allow partial match: user can type "nitrocop" instead of "nitrocop_devcontainer"
+            let groups = crate::remote::containers::find_all_containers()?;
+            // Exact match first
+            if groups.iter().any(|g| g.project == name) {
+                return Ok(name);
+            }
+            // Partial match: project name starts with the given name
+            let matches: Vec<_> = groups
+                .iter()
+                .filter(|g| g.project.starts_with(&name))
+                .collect();
+            match matches.len() {
+                1 => Ok(matches[0].project.clone()),
+                0 => anyhow::bail!(
+                    "no running devcontainer matching '{name}'.\n\n  \
+                     Run `devg list` to see running containers."
+                ),
+                _ => {
+                    let names: Vec<_> = matches.iter().map(|g| g.project.as_str()).collect();
+                    anyhow::bail!("'{name}' is ambiguous, matches: {}", names.join(", "))
+                }
+            }
+        }
+        None => {
+            let workspace = workspace_folder()?;
+            find_compose_project(&workspace)
+                .or_else(|| derive_compose_project(&workspace))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "could not determine compose project name for {}",
+                        workspace.display()
+                    )
+                })
+        }
+    }
+}
+
+/// Find the workspace folder for a running project (from container labels).
+fn resolve_workspace(project_name: &str) -> Result<PathBuf> {
+    let project = resolve_project(Some(project_name.to_string()))?;
+    let output = Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--format",
+            r#"{{.Label "devcontainer.local_folder"}}"#,
+        ])
+        .output()
+        .context("running docker ps")?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .find_map(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(s))
+            }
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("could not find workspace folder for project '{project_name}'")
+        })
 }
 
 /// Check that `devcontainer` CLI is installed.
@@ -199,7 +265,6 @@ mod tests {
     #[test]
     fn derive_compose_project_root_returns_none() {
         let p = derive_compose_project(Path::new("/"));
-        // Root has no file_name
         assert!(p.is_none());
     }
 
@@ -208,7 +273,6 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("devg-ws-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Save and restore CWD
         let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
 

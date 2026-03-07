@@ -55,12 +55,19 @@ enum Command {
     },
     /// Stop and remove the devcontainer
     Down {
+        /// Project name (from `devg list`). Default: current directory.
+        project: Option<String>,
+
         /// Also remove named volumes
         #[arg(short, long)]
         volumes: bool,
     },
     /// Run a command in the devcontainer (default: interactive shell)
     Exec {
+        /// Project name (from `devg list`). Omit to use current directory.
+        #[arg(short, long)]
+        project: Option<String>,
+
         /// Command and arguments to run
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
@@ -230,8 +237,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Init { project_dir, yes } => init::run(&project_dir, yes),
         Command::Up { reset } => container::up(reset),
-        Command::Down { volumes } => container::down(volumes),
-        Command::Exec { cmd } => container::exec(cmd),
+        Command::Down { project, volumes } => container::down(project, volumes),
+        Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::List => container::list(),
         Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
