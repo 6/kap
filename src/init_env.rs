@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 fn generate_shim(tool_name: &str) -> String {
-    format!("#!/bin/sh\nexec devg cli-shim {tool_name} \"$@\"\n")
+    format!("#!/bin/sh\nexec /opt/devg/devg cli-shim {tool_name} \"$@\"\n")
 }
 
 pub fn run(project_dir: &str) -> Result<()> {
@@ -92,15 +92,6 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;
     eprintln!("[init-env] regenerated {}", crate::init::OVERLAY_FILENAME);
-
-    // Copy devg binary for shim scripts to use
-    if !cli_tools.is_empty() {
-        let devg_bin = std::env::current_exe().with_context(|| "finding devg binary")?;
-        let dest = devcontainer_dir.join("devg-bin");
-        std::fs::copy(&devg_bin, &dest)
-            .with_context(|| format!("copying devg to {}", dest.display()))?;
-        eprintln!("[init-env] copied devg binary for CLI shims");
-    }
 
     // Write shim scripts for each CLI tool
     for tool_name in &cli_tools {

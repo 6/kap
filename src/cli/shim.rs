@@ -11,7 +11,8 @@ const DEVG_CLI_PORT: u16 = 3130;
 pub async fn run(tool: &str, args: &[String]) -> Result<()> {
     let url = format!("http://{DEVG_HOST}:{DEVG_CLI_PORT}/{tool}");
 
-    let client = reqwest::Client::new();
+    // Bypass HTTP_PROXY - talk directly to the sidecar on the internal network
+    let client = reqwest::Client::builder().no_proxy().build()?;
     let resp = client
         .post(&url)
         .json(&serde_json::json!({"args": args}))

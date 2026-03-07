@@ -45,8 +45,8 @@ pub fn generate_overlay(
             .iter()
             .map(|name| format!("      - ./{name}-shim.sh:/usr/local/bin/{name}:ro"))
             .collect();
-        // Mount devg binary so shims can call `devg cli-shim`
-        mounts.push("      - ./devg-bin:/usr/local/bin/devg:ro".to_string());
+        // Mount devg binary from sidecar via shared volume
+        mounts.push("      - devg-bin:/opt/devg:ro".to_string());
         format!("\n    volumes:\n{}", mounts.join("\n"))
     };
     format!(
@@ -82,6 +82,8 @@ services:
       - ./devg.toml:/etc/devg/config.toml:ro
       - ${{HOME}}/.devg/auth:/etc/devg/auth
       - proxy-logs:/var/log/devg
+      - devg-bin:/opt/devg
+    entrypoint: ["sh", "-c", "cp /usr/local/bin/devg /opt/devg/devg && exec devg proxy"]
     env_file:
       - path: .env
         required: false
@@ -98,6 +100,7 @@ services:
 
 volumes:
   proxy-logs:
+  devg-bin:
 
 # Static subnet so we can use fixed IPs for DNS and proxy references.
 # Internal to Docker, not your host network.
