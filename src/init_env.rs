@@ -39,9 +39,18 @@ pub fn run(project_dir: &str) -> Result<()> {
     let mut lines: Vec<String> = Vec::new();
 
     for var in &needed_vars {
+        // Re-evaluate shell patterns stored as comments (# KEY=$(cmd))
+        if let Some(pattern) = existing_patterns.get(var.as_str()) {
+            let resolved = eval_shell_substitution(pattern);
+            if !resolved.is_empty() {
+                lines.push(format!("# {var}={pattern}"));
+                lines.push(format!("{var}={resolved}"));
+                continue;
+            }
+        }
+        // Keep existing value (or evaluate if it contains $(cmd))
         if let Some(val) = existing.get(var.as_str()) {
             if val.contains("$(") {
-                // Shell substitution: evaluate and write result, keep pattern as comment
                 let resolved = eval_shell_substitution(val);
                 if !resolved.is_empty() {
                     lines.push(format!("# {var}={val}"));
@@ -50,15 +59,6 @@ pub fn run(project_dir: &str) -> Result<()> {
                 }
             } else if !val.is_empty() {
                 lines.push(format!("{var}={val}"));
-                continue;
-            }
-        }
-        // Check for pattern stored as comment (re-evaluate on each run)
-        if let Some(pattern) = existing_patterns.get(var.as_str()) {
-            let resolved = eval_shell_substitution(pattern);
-            if !resolved.is_empty() {
-                lines.push(format!("# {var}={pattern}"));
-                lines.push(format!("{var}={resolved}"));
                 continue;
             }
         }
@@ -325,6 +325,52 @@ mod tests {
         assert_eq!(patterns["GH_TOKEN"], "$(gh auth token)");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shell_pattern_survives_two_loads() {
+        // Simulates what happens across two init-env runs:
+        // 1. .env has GH_TOKEN=$(echo hello)
+        // 2. First load: evaluates to "hello", writes # GH_TOKEN=$(echo hello)\nGH_TOKEN=hello
+        // 3. Second load: finds pattern in comment, re-evaluates, keeps pattern
+        let dir = std::env::temp_dir().join(format!("devg-pattern-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+
+        // First run: raw pattern
+        std::fs::write(&path, "GH_TOKEN=$(echo hello)\n").unwrap();
+        let (values, patterns) = load_env_file(&path);
+        assert_eq!(values["GH_TOKEN"], "$(echo hello)");
+        assert!(patterns.is_empty());
+        // Simulate what init-env writes
+        let resolved = eval_shell_substitution(&values["GH_TOKEN"]);
+        assert_eq!(resolved, "hello");
+        std::fs::write(
+            &path,
+            format!("# GH_TOKEN=$(echo hello)\nGH_TOKEN={resolved}\n"),
+        )
+        .unwrap();
+
+        // Second run: pattern should come from comment, not the raw value
+        let (values2, patterns2) = load_env_file(&path);
+        assert_eq!(values2["GH_TOKEN"], "hello"); // raw value
+        assert_eq!(patterns2["GH_TOKEN"], "$(echo hello)"); // pattern preserved
+        // Pattern takes priority - re-evaluate it
+        let resolved2 = eval_shell_substitution(&patterns2["GH_TOKEN"]);
+        assert_eq!(resolved2, "hello");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn eval_shell_substitution_passthrough() {
+        assert_eq!(eval_shell_substitution("plain_value"), "plain_value");
+    }
+
+    #[test]
+    fn eval_shell_substitution_evaluates() {
+        let result = eval_shell_substitution("$(echo test123)");
+        assert_eq!(result, "test123");
     }
 
     #[test]
