@@ -138,13 +138,14 @@ graph LR
     Agent -- "MCP" --> MCP --> MCP_Servers["MCP servers"]
     Agent -- "gh, aws, ..." --> CLI --> APIs
 
-    style app fill:#1a1a2e,stroke:#e94560,color:#eee
-    style sidecar fill:#1a1a2e,stroke:#0f3460,color:#eee
-    style Agent fill:#16213e,stroke:#e94560,color:#eee
-    style DP fill:#16213e,stroke:#0f3460,color:#eee
-    style DNS fill:#16213e,stroke:#0f3460,color:#eee
-    style MCP fill:#16213e,stroke:#0f3460,color:#eee
-    style CLI fill:#16213e,stroke:#0f3460,color:#eee
+    style internal fill:#f5f5f5,stroke:#bbb,color:#333
+    style app fill:#fff0f0,stroke:#e94560,color:#333
+    style sidecar fill:#f0f4ff,stroke:#4a7fd4,color:#333
+    style Agent fill:#ffdede,stroke:#e94560,color:#333
+    style DP fill:#dce6f7,stroke:#4a7fd4,color:#333
+    style DNS fill:#dce6f7,stroke:#4a7fd4,color:#333
+    style MCP fill:#dce6f7,stroke:#4a7fd4,color:#333
+    style CLI fill:#dce6f7,stroke:#4a7fd4,color:#333
 ```
 
 - The app container has **no external network route**. All traffic goes through the sidecar.

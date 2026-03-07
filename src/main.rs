@@ -187,7 +187,7 @@ enum McpCommand {
     },
     /// List registered MCP servers
     List,
-    /// Show details for a registered MCP server (including tools)
+    /// Show details for a registered MCP server
     Get {
         /// Name of the server
         name: String,

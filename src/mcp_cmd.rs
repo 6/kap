@@ -83,13 +83,22 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
     }
 
     eprintln!();
-    eprintln!("Registered {name}. It will be auto-discovered by kap.");
+    eprintln!("Registered {name}.");
+    eprintln!();
     eprintln!("To restrict tools, add to .devcontainer/kap.toml:");
     eprintln!();
     eprintln!("  [[mcp.servers]]");
     eprintln!("  name = \"{name}\"");
     eprintln!("  allow_tools = [\"*\"]");
     eprintln!();
+
+    // Check if a kap container is already running — if so, hint about reset
+    if container_is_running() {
+        eprintln!("A kap container is already running. Restart it to pick up the new server:");
+        eprintln!();
+        eprintln!("  kap up --reset");
+        eprintln!();
+    }
 
     Ok(())
 }
@@ -185,7 +194,7 @@ pub async fn get(name: &str) -> Result<()> {
 
     let auth = StoredAuth::load(&file_path)?;
 
-    println!("Name:     {name}");
+    println!("Name:     \x1b[1m{name}\x1b[0m");
     println!("Upstream: {}", auth.upstream);
 
     let has_headers = !auth.headers.is_empty();
@@ -224,17 +233,9 @@ pub async fn get(name: &str) -> Result<()> {
     match fetch_tools(&auth.upstream, &mcp_auth).await {
         Ok(tools) => {
             eprintln!(" {} tools", tools.len());
-            println!();
-            for tool in &tools {
-                let name = tool["name"].as_str().unwrap_or("?");
-                let desc = tool["description"].as_str().unwrap_or("");
-                if desc.is_empty() {
-                    println!("  {name}");
-                } else {
-                    let short: String = desc.chars().take(60).collect();
-                    let suffix = if desc.len() > 60 { "..." } else { "" };
-                    println!("  {name:<30} {short}{suffix}");
-                }
+            if !tools.is_empty() {
+                println!();
+                print_tool_table(&tools);
             }
         }
         Err(e) => {
@@ -265,6 +266,64 @@ pub fn remove(name: &str) -> Result<()> {
 
     eprintln!("Removed {name}");
     Ok(())
+}
+
+/// Print tools as a two-column table (name + truncated description).
+fn print_tool_table(tools: &[serde_json::Value]) {
+    let rows: Vec<(&str, &str)> = tools
+        .iter()
+        .map(|t| {
+            let name = t["name"].as_str().unwrap_or("?");
+            let desc = t["description"].as_str().unwrap_or("");
+            (name, desc)
+        })
+        .collect();
+
+    let name_width = rows.iter().map(|(n, _)| n.len()).max().unwrap_or(4).max(4);
+    let term_width = terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80);
+    let desc_width = term_width.saturating_sub(name_width + 5); // 2 indent + 3 gap
+
+    println!(
+        "  \x1b[2m{:<nw$}   Description\x1b[0m",
+        "Tool",
+        nw = name_width
+    );
+    println!(
+        "  {:\u{2500}<nw$}   {:\u{2500}<dw$}",
+        "",
+        "",
+        nw = name_width,
+        dw = desc_width
+    );
+    for (name, desc) in &rows {
+        let short: String = desc.chars().take(desc_width).collect();
+        let suffix = if desc.chars().count() > desc_width {
+            "\u{2026}"
+        } else {
+            ""
+        };
+        println!(
+            "  \x1b[1m{:<nw$}\x1b[0m   {short}{suffix}",
+            name,
+            nw = name_width
+        );
+    }
+}
+
+/// Check if any kap sidecar container is currently running.
+fn container_is_running() -> bool {
+    std::process::Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|n| n.contains("kap-kap") || n.ends_with("-kap-1"))
+        })
+        .unwrap_or(false)
 }
 
 /// Try initialize + tools/list at the given URL and common subpaths (/mcp).
