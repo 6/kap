@@ -6,6 +6,7 @@ mod init_env;
 mod mcp;
 mod mcp_cmd;
 mod proxy;
+mod remote;
 mod status;
 
 use std::sync::Arc;
@@ -101,6 +102,34 @@ enum Command {
         /// Directory to store auth tokens
         #[arg(long)]
         auth_dir: Option<String>,
+    },
+    /// Remote access for monitoring and steering from iPhone
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum RemoteCommand {
+    /// Start the remote access daemon
+    Start {
+        /// Address to listen on
+        #[arg(long, default_value = "0.0.0.0:19420")]
+        listen: String,
+    },
+    /// Show QR code for iPhone pairing
+    Pair {
+        /// Port the remote daemon is listening on
+        #[arg(long, default_value_t = 19420)]
+        port: u16,
+    },
+    /// List paired devices
+    Devices,
+    /// Revoke a paired device
+    Revoke {
+        /// Device ID to revoke
+        device_id: String,
     },
 }
 
@@ -241,6 +270,18 @@ async fn main() -> anyhow::Result<()> {
             mcp::auth::write_auth_file(&name, &stored, &dir)?;
             eprintln!("[auth] tokens saved to {dir}/{name}.json");
             Ok(())
+        }
+        Command::Remote { command } => {
+            let data_dir = remote::auth::data_dir();
+            match command {
+                RemoteCommand::Start { listen } => remote::run(&listen, data_dir).await,
+                RemoteCommand::Pair { port } => remote::print_pair(&data_dir, port),
+                RemoteCommand::Devices => {
+                    remote::list_devices(&data_dir);
+                    Ok(())
+                }
+                RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
+            }
         }
     }
 }

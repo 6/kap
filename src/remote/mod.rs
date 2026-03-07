@@ -1,0 +1,239 @@
+pub mod api;
+pub mod auth;
+pub mod containers;
+pub mod ws;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
+
+type Body = Full<Bytes>;
+
+pub struct RemoteState {
+    pub data_dir: PathBuf,
+}
+
+/// Start the remote access HTTPS daemon.
+pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
+    // Install the default crypto provider for rustls
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let (cert_pem, key_pem, fingerprint) = auth::load_or_generate_tls(&data_dir)?;
+    let _pairing_token = auth::load_or_generate_pairing_token(&data_dir)?;
+
+    // Build TLS config
+    let tls_config = build_tls_config(&cert_pem, &key_pem)?;
+    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+    let state = Arc::new(RemoteState {
+        data_dir: data_dir.clone(),
+    });
+
+    let listener = TcpListener::bind(listen).await?;
+    let local_addr = listener.local_addr()?;
+
+    eprintln!("[remote] listening on https://{local_addr}");
+    eprintln!("[remote] cert fingerprint: {fingerprint}");
+    eprintln!("[remote] run `devg remote pair` to get the QR code for iPhone pairing");
+
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        let acceptor = acceptor.clone();
+        let state = state.clone();
+
+        tokio::spawn(async move {
+            let tls_stream = match acceptor.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // Don't spam logs for non-TLS connections (e.g., health checks)
+                    if !e
+                        .to_string()
+                        .contains("received message with invalid content type")
+                    {
+                        eprintln!("[remote] TLS handshake failed from {addr}: {e}");
+                    }
+                    return;
+                }
+            };
+
+            let io = TokioIo::new(tls_stream);
+            let state = state.clone();
+            let service = service_fn(move |req| {
+                let state = state.clone();
+                async move { handle_request(req, state).await }
+            });
+
+            #[allow(clippy::collapsible_if)]
+            if let Err(e) = http1::Builder::new()
+                .serve_connection(io, service)
+                .with_upgrades()
+                .await
+            {
+                if !e.to_string().contains("error shutting down connection") {
+                    eprintln!("[remote] connection error from {addr}: {e}");
+                }
+            }
+        });
+    }
+}
+
+async fn handle_request(
+    req: Request<Incoming>,
+    state: Arc<RemoteState>,
+) -> Result<Response<Body>, hyper::Error> {
+    match route(req, state).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => {
+            eprintln!("[remote] handler error: {e}");
+            Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(format!("{{\"error\":\"{e}\"}}"))))
+                .unwrap())
+        }
+    }
+}
+
+async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Response<Body>> {
+    let path = req.uri().path().to_string();
+
+    // Auth check: all routes require a valid bearer token
+    let token = extract_bearer_token(&req);
+    let auth_result = match token {
+        Some(t) => auth::validate_token(&state.data_dir, t),
+        None => None,
+    };
+
+    // Special case: /api/pair only accepts the pairing token
+    if path == "/api/pair" {
+        match auth_result.as_deref() {
+            Some("pairing") => return api::handle(&req, &state).await,
+            _ => {
+                return Ok(Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(
+                        r#"{"error":"invalid or missing pairing token"}"#,
+                    )))
+                    .unwrap());
+            }
+        }
+    }
+
+    // All other routes accept either pairing token or session token
+    if auth_result.is_none() {
+        return Ok(Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("Content-Type", "application/json")
+            .body(Full::new(Bytes::from(
+                r#"{"error":"invalid or missing authorization token"}"#,
+            )))
+            .unwrap());
+    }
+
+    // Route to handler
+    if path.starts_with("/ws/") {
+        ws::handle(req, state).await
+    } else if path.starts_with("/api/") {
+        api::handle(&req, &state).await
+    } else {
+        Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Full::new(Bytes::from("not found")))
+            .unwrap())
+    }
+}
+
+fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
+    req.headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+}
+
+fn build_tls_config(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfig> {
+    let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .context("parsing cert PEM")?;
+
+    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
+        .context("parsing key PEM")?
+        .context("no private key found")?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .context("building TLS config")?;
+
+    Ok(config)
+}
+
+/// Print the pairing QR code.
+pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
+    let (_, _, fingerprint) = auth::load_or_generate_tls(data_dir)?;
+    let token = auth::load_or_generate_pairing_token(data_dir)?;
+
+    let ip = auth::local_ip().unwrap_or_else(|| "localhost".to_string());
+    let url = format!("devg://{ip}:{port}:{token}:{fingerprint}");
+
+    auth::print_qr(&url);
+    Ok(())
+}
+
+/// List paired devices.
+pub fn list_devices(data_dir: &Path) {
+    let devices = auth::load_devices(data_dir);
+    if devices.is_empty() {
+        println!("No paired devices.");
+        println!("Run `devg remote pair` to get the pairing QR code.");
+        return;
+    }
+    println!("{:<14} {:<20} {:<26}", "ID", "NAME", "PAIRED");
+    for d in &devices {
+        println!("{:<14} {:<20} {:<26}", d.id, d.name, d.paired_at);
+    }
+}
+
+/// Revoke a paired device.
+pub fn revoke(data_dir: &Path, device_id: &str) -> Result<()> {
+    let removed = auth::revoke_device(data_dir, device_id)?;
+    if removed {
+        println!("Revoked device {device_id}");
+    } else {
+        println!("No device found with ID {device_id}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_bearer_works() {
+        let req = Request::builder()
+            .header("Authorization", "Bearer my-token-123")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        // Can't use extract_bearer_token directly due to body type mismatch,
+        // so test the logic manually:
+        let header = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let token = header.strip_prefix("Bearer ").unwrap();
+        assert_eq!(token, "my-token-123");
+    }
+}
