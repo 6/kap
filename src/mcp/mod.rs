@@ -123,6 +123,28 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
     }
 
+    // Auto-discover OAuth servers from auth files not already in config
+    let config_names: std::collections::HashSet<&str> =
+        config.servers.iter().map(|s| s.name.as_str()).collect();
+    for name in list_auth_files(&config.auth_dir) {
+        if config_names.contains(name.as_str()) {
+            continue;
+        }
+        let auth_path = Path::new(&config.auth_dir).join(format!("{name}.json"));
+        match StoredAuth::load(&auth_path) {
+            Ok(auth) => {
+                let upstream = auth.upstream.clone();
+                let client = UpstreamClient::new(upstream, auth, vec![], Some(auth_path));
+                let filter = ToolFilter::new(&[], &[]);
+                eprintln!("[mcp] {name} → {} (auto-discovered)", client.upstream_url);
+                servers.insert(name, McpServer { client, filter });
+            }
+            Err(e) => {
+                eprintln!("[mcp] skipping {name}: {e}");
+            }
+        }
+    }
+
     let state = Arc::new(McpState { servers, logger });
     let listener = TcpListener::bind(&config.listen).await?;
     eprintln!("[mcp] listening on {}", config.listen);

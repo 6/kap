@@ -68,31 +68,54 @@ impl Config {
         &self.proxy.network.allow
     }
 
-    /// Collect domains from MCP server upstream URLs (both from config and auth files).
+    /// Collect domains from MCP server upstream URLs (config, auth files, and auto-discovered).
     /// These are implicitly allowed so the MCP proxy can reach its upstreams.
     pub fn mcp_upstream_domains(&self) -> Vec<String> {
         let Some(ref mcp) = self.mcp else {
             return Vec::new();
         };
         let auth_dir = &mcp.auth_dir;
-        mcp.servers
+        let config_names: std::collections::HashSet<&str> =
+            mcp.servers.iter().map(|s| s.name.as_str()).collect();
+
+        let mut domains: Vec<String> = mcp
+            .servers
             .iter()
             .filter_map(|s| {
                 // Try config upstream first, then fall back to auth file
-                let upstream = s.upstream.clone().or_else(|| {
-                    let path = std::path::Path::new(auth_dir).join(format!("{}.json", s.name));
-                    std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|content| {
-                            serde_json::from_str::<serde_json::Value>(&content).ok()
-                        })
-                        .and_then(|v| v["upstream"].as_str().map(String::from))
-                });
+                let upstream = s
+                    .upstream
+                    .clone()
+                    .or_else(|| upstream_from_auth_file(auth_dir, &s.name));
                 upstream
                     .and_then(|u| url::Url::parse(&u).ok())
                     .and_then(|u| u.host_str().map(String::from))
             })
-            .collect()
+            .collect();
+
+        // Auto-discovered servers from auth files not in config
+        if let Ok(entries) = std::fs::read_dir(auth_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if config_names.contains(name) {
+                    continue;
+                }
+                if let Some(domain) = upstream_from_auth_file(auth_dir, name)
+                    .and_then(|u| url::Url::parse(&u).ok())
+                    .and_then(|u| u.host_str().map(String::from))
+                {
+                    domains.push(domain);
+                }
+            }
+        }
+
+        domains
     }
 }
 
@@ -140,6 +163,15 @@ pub struct McpServerConfig {
     pub allow_tools: Vec<String>,
     #[serde(default)]
     pub deny_tools: Vec<String>,
+}
+
+/// Read the upstream URL from an auth file.
+fn upstream_from_auth_file(auth_dir: &str, name: &str) -> Option<String> {
+    let path = std::path::Path::new(auth_dir).join(format!("{name}.json"));
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|v| v["upstream"].as_str().map(String::from))
 }
 
 const DEFAULT_IMAGE: &str = "ghcr.io/6/devcontainer-guard:latest";

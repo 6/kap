@@ -19,11 +19,20 @@ pub async fn run_mcp(config_path: &str) -> Result<()> {
     let http = reqwest::Client::new();
     let mcp_base = "http://127.0.0.1:3129";
 
+    // Collect server names from config + auto-discovered auth files
+    let mut server_names: Vec<String> = mcp.servers.iter().map(|s| s.name.clone()).collect();
+    let config_names: std::collections::HashSet<&str> =
+        mcp.servers.iter().map(|s| s.name.as_str()).collect();
+    for name in crate::mcp::list_auth_files(&mcp.auth_dir) {
+        if !config_names.contains(name.as_str()) {
+            server_names.push(name);
+        }
+    }
+
     let mut set = tokio::task::JoinSet::new();
-    for server in &mcp.servers {
+    for name in server_names {
         let http = http.clone();
-        let url = format!("{mcp_base}/{}", server.name);
-        let name = server.name.clone();
+        let url = format!("{mcp_base}/{name}");
         set.spawn(async move {
             let result = check_mcp_server(&http, &url).await;
             match result {
@@ -115,7 +124,7 @@ async fn check_mcp_server(http: &reqwest::Client, url: &str) -> Result<usize> {
 }
 
 /// Parse an MCP response that may be plain JSON or SSE-framed.
-fn parse_mcp_response(text: &str) -> Result<serde_json::Value> {
+pub fn parse_mcp_response(text: &str) -> Result<serde_json::Value> {
     // Try plain JSON first
     if let Ok(v) = serde_json::from_str(text) {
         return Ok(v);

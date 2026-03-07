@@ -94,6 +94,123 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
+/// `devg mcp get <name>` — show details for a registered MCP server.
+pub async fn get(name: &str) -> Result<()> {
+    let dir = auth_dir();
+    let file_path = dir.join(format!("{name}.json"));
+
+    if !file_path.exists() {
+        anyhow::bail!("no auth registered for '{name}'. Run `devg mcp add {name} <upstream>`");
+    }
+
+    let auth = StoredAuth::load(&file_path)?;
+
+    println!("Name:     {name}");
+    println!("Upstream: {}", auth.upstream);
+
+    let expires = auth
+        .expires_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "never".to_string());
+    println!("Expires:  {expires}");
+
+    // Fetch tools list from upstream
+    println!();
+    eprint!("Fetching tools...");
+    match fetch_tools_list(&auth.upstream, &auth.access_token).await {
+        Ok(tools) => {
+            eprintln!(" {} tools", tools.len());
+            println!();
+            for tool in &tools {
+                let name = tool["name"].as_str().unwrap_or("?");
+                let desc = tool["description"].as_str().unwrap_or("");
+                if desc.is_empty() {
+                    println!("  {name}");
+                } else {
+                    let short: String = desc.chars().take(60).collect();
+                    let suffix = if desc.len() > 60 { "..." } else { "" };
+                    println!("  {name:<30} {short}{suffix}");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!(" failed: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn fetch_tools_list(url: &str, token: &str) -> Result<Vec<serde_json::Value>> {
+    let http = reqwest::Client::new();
+
+    // 1. Initialize to establish session
+    let init_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "devg", "version": "1.0"}
+        }
+    });
+    let resp = http
+        .post(url)
+        .bearer_auth(token)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .json(&init_body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .context("initialize")?;
+
+    let session_id = resp
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
+    if !resp.status().is_success() {
+        anyhow::bail!("initialize: HTTP {}", resp.status());
+    }
+    let _ = resp.text().await;
+
+    // 2. tools/list with session
+    let list_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+    let mut req = http
+        .post(url)
+        .bearer_auth(token)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .json(&list_body)
+        .timeout(std::time::Duration::from_secs(10));
+
+    if let Some(ref sid) = session_id {
+        req = req.header("Mcp-Session-Id", sid);
+    }
+
+    let resp = req.send().await.context("tools/list")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("tools/list: HTTP {}", resp.status());
+    }
+
+    let text = resp.text().await?;
+    let json = crate::check::parse_mcp_response(&text)?;
+    let tools = json["result"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    Ok(tools)
+}
+
 /// `devg mcp remove <name>` — delete auth file and lock file.
 pub fn remove(name: &str) -> Result<()> {
     let dir = auth_dir();

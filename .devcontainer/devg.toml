@@ -43,12 +43,15 @@ build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "pro
 # MCP proxy: tool-level filtering + credential isolation
 [mcp]
 
+# Servers registered via `devg mcp add` are auto-discovered from ~/.devg/auth/
+# Add a [[mcp.servers]] entry only when you need tool filtering or non-OAuth auth:
+
 [[mcp.servers]]
 name = "context7"
 upstream = "https://mcp.context7.com/mcp"
 headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
-# allow_tools = ["resolve-library-id", "get-library-docs"]
 
+# linear is auto-discovered from ~/.devg/auth/linear.json; restrict destructive tools
 [[mcp.servers]]
 name = "linear"
-upstream = "https://mcp.linear.app/mcp"
+deny_tools = ["delete_*"]

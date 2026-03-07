@@ -56,30 +56,49 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules 
 
 The MCP proxy sits between the agent and remote MCP servers. It controls which tools the agent can call and keeps credentials (OAuth tokens, API keys) out of the app container.
 
+### Registering servers
+
+OAuth servers are registered once on the host. Tokens are stored in `~/.devg/auth/` and shared across projects:
+
+```bash
+devg mcp add linear https://mcp.linear.app
+devg mcp add github https://mcp.github.com
+devg mcp list          # see registered servers
+devg mcp get linear    # show details + tools list
+```
+
+Registered servers are **auto-discovered** — they're proxied automatically without any config in `devg.toml`. The agent connects to `http://172.28.0.3:3129/linear` instead of the real server. devg forwards requests with the stored auth.
+
+### Tool filtering
+
+Add a `[[mcp.servers]]` entry in `devg.toml` only when you need to restrict tools:
+
 ```toml
 [mcp]
 
 [[mcp.servers]]
 name = "github"
-upstream = "https://mcp.github.com"
-token_env = "GH_TOKEN"
-allow_tools = ["get_pull_request", "list_issues", "search_code"]
 deny_tools = ["create_repository", "delete_repository"]
 ```
 
-The agent connects to `http://172.28.0.3:3129/github` instead of the real server. devg forwards requests with the configured auth and filters `tools/list` and `tools/call`.
+No `upstream` needed — it's read from the auth file. You can also use `allow_tools` for an allowlist instead.
 
-Three auth modes:
+### Non-OAuth auth
+
+For servers that use API keys or custom headers instead of OAuth, specify `upstream` and auth in `devg.toml`:
 
 ```toml
-# 1. Bearer token from env var
+# Bearer token from env var
+[[mcp.servers]]
+name = "github"
+upstream = "https://mcp.github.com"
 token_env = "GH_TOKEN"
 
-# 2. Custom headers (${VAR} expanded from env)
-headers = { "X-Api-Key" = "${MY_KEY}" }
-
-# 3. OAuth 2.1 (run once on host, tokens stored in ~/.devg/auth/)
-# devg auth github --upstream https://mcp.github.com
+# Custom headers (${VAR} expanded from env)
+[[mcp.servers]]
+name = "context7"
+upstream = "https://mcp.context7.com/mcp"
+headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
 ```
 
 ## Compose overlay
@@ -145,7 +164,8 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 | `devg init-env` | Host | Regenerate compose overlay + .env (runs as initializeCommand) |
 | `devg status` | Host | Check if everything is wired correctly |
 | `devg why-denied` | Host | Show denied requests from the proxy log |
-| `devg auth <name> --upstream <url>` | Host | OAuth 2.1 setup for an MCP server |
+| `devg mcp add <name> <url>` | Host | Register an MCP server (OAuth 2.1) |
+| `devg mcp get <name>` | Host | Show server details and tools list |
 | `devg proxy` | Proxy sidecar | Domain proxy + DNS forwarder + MCP proxy (internal) |
 | `devg check` | Proxy sidecar | Health check (internal, used by Docker healthcheck) |
 

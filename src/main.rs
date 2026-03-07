@@ -109,6 +109,11 @@ enum McpCommand {
     },
     /// List registered MCP servers
     List,
+    /// Show details for a registered MCP server (including tools)
+    Get {
+        /// Name of the server
+        name: String,
+    },
     /// Remove a registered MCP server
     Remove {
         /// Name of the server to remove
@@ -193,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
                 reauth,
             } => mcp_cmd::add(&name, &upstream, reauth).await,
             McpCommand::List => mcp_cmd::list(),
+            McpCommand::Get { name } => mcp_cmd::get(&name).await,
             McpCommand::Remove { name } => mcp_cmd::remove(&name),
         },
         Command::Auth {

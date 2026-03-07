@@ -17,7 +17,7 @@ Single Rust binary with three enforcement layers:
 
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
-3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Provides tool-level filtering and credential isolation. Only starts when `[mcp]` is in config.
+3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Provides tool-level filtering and credential isolation. Only starts when `[mcp]` is in config. OAuth servers registered via `devg mcp add` are auto-discovered from `~/.devg/auth/` without needing `[[mcp.servers]]` entries (add entries only for tool filtering).
 
 ## Key modules
 
