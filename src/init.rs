@@ -63,22 +63,27 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     write_file(&devg_toml_path, &generate_config(DEFAULT_DOMAINS))?;
     write_file(&overlay_path, &generate_overlay(&service_name))?;
 
-    // Build the new dockerComposeFile value for display
-    let mut all_compose: Vec<String> = compose_files;
-    all_compose.push("docker-compose.devg.yml".to_string());
-    let compose_json: Vec<String> = all_compose.iter().map(|f| format!("\"{f}\"")).collect();
-    let compose_value = format!("[{}]", compose_json.join(", "));
+    // Update devcontainer.json: add overlay to dockerComposeFile, add initializeCommand
+    let mut dc_obj = dc_json.clone();
+    let mut all_compose: Vec<serde_json::Value> = compose_files
+        .iter()
+        .map(|f| serde_json::Value::String(f.clone()))
+        .collect();
+    all_compose.push(serde_json::Value::String(
+        "docker-compose.devg.yml".to_string(),
+    ));
+    dc_obj["dockerComposeFile"] = serde_json::Value::Array(all_compose);
+    dc_obj["initializeCommand"] = serde_json::Value::String("devg init-env".to_string());
+
+    let updated = serde_json::to_string_pretty(&dc_obj)?;
+    write_file(&devcontainer_json_path, &format!("{updated}\n"))?;
 
     println!();
     println!("Created .devcontainer/devg.toml");
     println!("Created .devcontainer/docker-compose.devg.yml");
+    println!("Updated .devcontainer/devcontainer.json");
     println!();
-    println!(">>> Add these to .devcontainer/devcontainer.json:");
-    println!();
-    println!("  \"dockerComposeFile\": {compose_value},");
-    println!("  \"initializeCommand\": \"devg init-env\"");
-    println!();
-    println!("Then: devcontainer up --workspace-folder .");
+    println!("Next: devcontainer up --workspace-folder .");
 
     Ok(())
 }
@@ -374,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_project_creates_overlay() {
+    fn existing_project_creates_overlay_and_updates_json() {
         let dir = tempdir("scaffold-existing");
         let dc = dir.join(".devcontainer");
         fs::create_dir_all(&dc).unwrap();
@@ -388,13 +393,47 @@ mod tests {
 
         assert!(dc.join("devg.toml").exists());
         assert!(dc.join("docker-compose.devg.yml").exists());
-        // Should NOT create docker-compose.yml or overwrite devcontainer.json
         assert!(!dc.join("docker-compose.yml").exists());
 
         let overlay = fs::read_to_string(dc.join("docker-compose.devg.yml")).unwrap();
         assert!(overlay.contains("myapp:"));
         assert!(overlay.contains("devg:"));
         assert!(overlay.contains("devg_sandbox:"));
+
+        // devcontainer.json should be updated with overlay and initializeCommand
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        let compose_arr = updated["dockerComposeFile"].as_array().unwrap();
+        assert_eq!(compose_arr.len(), 2);
+        assert_eq!(compose_arr[0], "compose.yaml");
+        assert_eq!(compose_arr[1], "docker-compose.devg.yml");
+        assert_eq!(updated["initializeCommand"], "devg init-env");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_project_appends_to_compose_array() {
+        let dir = tempdir("scaffold-array");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(
+            dc.join("devcontainer.json"),
+            r#"{"service": "api", "dockerComposeFile": ["docker-compose.yml", "docker-compose.override.yml"]}"#,
+        )
+        .unwrap();
+
+        run(dir.to_str().unwrap()).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        let compose_arr = updated["dockerComposeFile"].as_array().unwrap();
+        assert_eq!(compose_arr.len(), 3);
+        assert_eq!(compose_arr[0], "docker-compose.yml");
+        assert_eq!(compose_arr[1], "docker-compose.override.yml");
+        assert_eq!(compose_arr[2], "docker-compose.devg.yml");
 
         fs::remove_dir_all(&dir).unwrap();
     }
