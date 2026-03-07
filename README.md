@@ -17,10 +17,13 @@ Run AI agents in secure capsules. Built on devcontainers with network controls a
 cargo install kap
 
 cd your-project
-kap init
-$EDITOR .devcontainer/kap.toml   # review allowed domains, MCP servers, CLI tools
-kap up
+kap init                          # scaffold .devcontainer/ with kap.toml
+$EDITOR .devcontainer/kap.toml    # review allowed domains, MCP servers, CLI tools
+kap up                            # start the sandboxed devcontainer
+kap exec                          # shell into it
 ```
+
+From inside the container, install and run Claude Code, Codex, or any AI agent. All network access is gated by the sidecar.
 
 ## Domain allowlist
 
@@ -96,22 +99,6 @@ env = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
 
 `deny` overrides `allow`. Tools must be installed on the sidecar (`gh` is included by default; add others via `[compose] build`).
 
-## Compose overlay
-
-By default, the kap sidecar pulls from `ghcr.io/6/kap:latest`. To build from source or use a different image, add a `[compose]` section to `kap.toml`:
-
-```toml
-# Pull from a registry (default if [compose] is omitted)
-[compose]
-image = "ghcr.io/6/kap:latest"
-
-# Or build from source
-[compose]
-build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "proxy" }
-```
-
-The overlay is regenerated on every `kap up`. Don't edit `docker-compose.kap.yml` directly.
-
 ## Remote access
 
 Monitor and steer AI agents running in devcontainers from your phone over local WiFi.
@@ -128,14 +115,16 @@ Scan the QR code on your phone to open the web UI. It auto-pairs and gives you:
 
 The daemon runs on the host. All API endpoints require a bearer token issued during QR pairing.
 
-## Architecture
+## How it works
+
+`kap up` starts two containers on an internal Docker network: your app container (isolated, no internet) and a kap sidecar (controls all outbound access). The sidecar image defaults to `ghcr.io/6/kap:latest`.
 
 ```
 ┌──────────────────────────────────────────────────┐
 │ Internal network                                  │
 │                                                   │
 │  ┌──────────────┐    ┌──────────────────┐         │
-│  │ App container │    │ Proxy sidecar    │         │
+│  │ App container │    │ kap sidecar      │         │
 │  │  (isolated)   │    │                  │         │
 │  │  HTTP_PROXY ──┼───►│  domain proxy    │──► Internet
 │  │               │    │  :3128           │         │
@@ -152,10 +141,12 @@ The daemon runs on the host. All API endpoints require a bearer token issued dur
 └──────────────────────────────────────────────────┘
 ```
 
-- The app container has **no external network route**. All traffic goes through the proxy sidecar.
+- The app container has **no external network route**. All traffic goes through the sidecar.
 - DNS queries only resolve allowed domains. Disallowed domains get NXDOMAIN.
 - Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
-- **Credentials never enter the app container.** OAuth tokens, API keys, and GH_TOKEN live on the proxy sidecar only. The proxy injects auth when forwarding upstream.
+- **Credentials never enter the app container.** OAuth tokens, API keys, and GH_TOKEN live on the sidecar only.
+
+The sidecar is added via a generated compose overlay (`docker-compose.kap.yml`), regenerated on every `kap up`. To build from source instead of pulling the image, add `[compose] build = { ... }` to `kap.toml`.
 
 ## Security model
 
