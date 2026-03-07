@@ -30,6 +30,10 @@ fn bad(msg: &str, fail: &mut u32) {
 }
 
 pub fn run() -> Result<()> {
+    if !std::path::Path::new(".devcontainer/kap.toml").exists() {
+        anyhow::bail!("No kap.toml found. Run `kap init` first to set up your devcontainer.");
+    }
+
     println!();
 
     let config = load_local_config();

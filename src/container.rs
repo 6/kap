@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 
 /// Start the devcontainer.
 pub fn up(reset: bool) -> Result<()> {
+    require_kap_init()?;
     require_devcontainer()?;
     let workspace = workspace_folder()?;
 
@@ -248,6 +249,14 @@ fn resolve_workspace(project_name: &str) -> Result<PathBuf> {
 }
 
 /// Check that `devcontainer` CLI is installed.
+fn require_kap_init() -> Result<()> {
+    let path = Path::new(".devcontainer/kap.toml");
+    if !path.exists() {
+        anyhow::bail!("No kap.toml found. Run `kap init` first to set up your devcontainer.");
+    }
+    Ok(())
+}
+
 fn require_devcontainer() -> Result<()> {
     match Command::new("which")
         .arg("devcontainer")
