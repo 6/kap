@@ -28,7 +28,7 @@ pub fn run(project_dir: &str) -> Result<()> {
 
     // Regenerate compose overlay (non-fatal: warn and continue if it fails)
     if let Err(e) = regenerate_overlay(&devcontainer_dir, &config_path) {
-        eprintln!("[init-env] warning: could not regenerate overlay: {e}");
+        eprintln!("[sidecar-init] warning: could not regenerate overlay: {e}");
     }
 
     let needed_vars = vars_from_config(&config_path)?;
@@ -66,7 +66,7 @@ pub fn run(project_dir: &str) -> Result<()> {
         if let Ok(val) = std::env::var(var)
             && !val.is_empty()
         {
-            eprintln!("[init-env] {var} (from host env)");
+            eprintln!("[sidecar-init] {var} (from host env)");
             lines.push(format!("{var}={val}"));
         }
     }
@@ -75,7 +75,7 @@ pub fn run(project_dir: &str) -> Result<()> {
     if !content.is_empty() {
         std::fs::write(&env_path, content + "\n")?;
         eprintln!(
-            "[init-env] wrote {} vars to {}",
+            "[sidecar-init] wrote {} vars to {}",
             lines.len(),
             env_path.display()
         );
@@ -113,7 +113,10 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         crate::init::generate_overlay(&service_name, &compose_config, &cli_tools, &subnet_prefix);
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;
-    eprintln!("[init-env] regenerated {}", crate::init::OVERLAY_FILENAME);
+    eprintln!(
+        "[sidecar-init] regenerated {}",
+        crate::init::OVERLAY_FILENAME
+    );
 
     // Write shim scripts for each CLI tool
     for tool_name in &cli_tools {
@@ -126,7 +129,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))?;
         }
-        eprintln!("[init-env] wrote {tool_name}-shim.sh");
+        eprintln!("[sidecar-init] wrote {tool_name}-shim.sh");
     }
 
     Ok(())
@@ -146,12 +149,12 @@ fn eval_shell_substitution(val: &str) -> String {
         Ok(output) if output.status.success() => {
             let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if result.is_empty() {
-                eprintln!("[init-env] warning: {val} evaluated to empty");
+                eprintln!("[sidecar-init] warning: {val} evaluated to empty");
             }
             result
         }
         _ => {
-            eprintln!("[init-env] warning: failed to evaluate {val}");
+            eprintln!("[sidecar-init] warning: failed to evaluate {val}");
             String::new()
         }
     }

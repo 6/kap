@@ -3,7 +3,7 @@
   "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
   "service": "app",
   "workspaceFolder": "/workspaces/kap",
-  "initializeCommand": "kap init-env",
+  "initializeCommand": "kap sidecar-init",
   "postCreateCommand": ".devcontainer/setup.sh",
   "remoteUser": "vscode"
 }

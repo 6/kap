@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "kap",
     version,
-    about = "Secure capsule for AI coding agents"
+    about = "Run AI agents in devcontainers with network controls and remote access"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -81,8 +81,9 @@ enum Command {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Generate .devcontainer/.env with host credentials (for initializeCommand)
-    InitEnv {
+    /// Regenerate overlay, .env, and shims (runs as initializeCommand)
+    #[command(hide = true)]
+    SidecarInit {
         /// Project directory containing .devcontainer/
         #[arg(short, long, default_value = ".")]
         project_dir: String,
@@ -202,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Down { project, volumes } => container::down(project, volumes),
         Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::Init { project_dir, yes } => init::run(&project_dir, yes),
-        Command::InitEnv { project_dir } => init_env::run(&project_dir),
+        Command::SidecarInit { project_dir } => init_env::run(&project_dir),
         Command::List { stats } => container::list(stats),
         Command::Mcp { command } => match command {
             McpCommand::Add {

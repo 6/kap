@@ -4,7 +4,7 @@
 #
 # Pre-flight (run on host before starting the devcontainer):
 #   gh auth status          # ensure GitHub CLI is authenticated
-#   kap init-env           # generates .env with GH_TOKEN + API keys
+#   kap sidecar-init       # generates .env with GH_TOKEN + API keys
 set -euo pipefail
 
 PROXY_IP="172.28.0.3"

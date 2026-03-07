@@ -2,7 +2,7 @@
 name = "kap"
 version = "0.0.1-pre3"
 edition = "2024"
-description = "Secure capsule for AI coding agents"
+description = "Run AI agents in devcontainers with network controls and remote access"
 license = "MIT"
 
 [[bin]]
