@@ -15,11 +15,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(
-    name = "kap",
-    version,
-    about = "Run AI agents in secure capsules"
-)]
+#[command(name = "kap", version, about = "Run AI agents in secure capsules")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
