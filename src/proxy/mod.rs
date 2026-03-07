@@ -359,11 +359,7 @@ mod tests {
     #[tokio::test]
     async fn connect_without_port_returns_response() {
         let port = start_proxy(&["allowed.test"], &[], false).await;
-        let resp = raw_request(
-            port,
-            "CONNECT noport HTTP/1.1\r\nHost: noport\r\n\r\n",
-        )
-        .await;
+        let resp = raw_request(port, "CONNECT noport HTTP/1.1\r\nHost: noport\r\n\r\n").await;
         // "noport" is not in the allowlist, so should be denied
         assert!(resp.contains("403"), "expected 403, got: {resp}");
     }
@@ -371,12 +367,11 @@ mod tests {
     #[tokio::test]
     async fn http_empty_host_denied() {
         let port = start_proxy(&["allowed.test"], &[], false).await;
-        let resp = raw_request(
-            port,
-            "GET / HTTP/1.1\r\nHost: \r\n\r\n",
-        )
-        .await;
-        assert!(resp.contains("403"), "empty host should be denied, got: {resp}");
+        let resp = raw_request(port, "GET / HTTP/1.1\r\nHost: \r\n\r\n").await;
+        assert!(
+            resp.contains("403"),
+            "empty host should be denied, got: {resp}"
+        );
     }
 
     #[tokio::test]
@@ -393,7 +388,10 @@ mod tests {
             "observe mode should not deny HTTP, got: {resp}"
         );
         // Expect 502 since the upstream is unreachable
-        assert!(resp.contains("502"), "expected 502 Bad Gateway, got: {resp}");
+        assert!(
+            resp.contains("502"),
+            "expected 502 Bad Gateway, got: {resp}"
+        );
     }
 
     #[tokio::test]
@@ -420,6 +418,9 @@ mod tests {
         )
         .await;
         assert!(!resp.contains("403"), "should not be denied, got: {resp}");
-        assert!(resp.contains("502"), "expected 502 for closed port 80, got: {resp}");
+        assert!(
+            resp.contains("502"),
+            "expected 502 for closed port 80, got: {resp}"
+        );
     }
 }

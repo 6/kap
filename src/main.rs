@@ -1,18 +1,22 @@
 mod check;
 mod config;
-mod status;
 mod init;
 mod init_env;
 mod mcp;
 mod mcp_cmd;
 mod proxy;
+mod status;
 
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "devg", version, about = "Network and MCP access control for devcontainers")]
+#[command(
+    name = "devg",
+    version,
+    about = "Network and MCP access control for devcontainers"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -129,11 +133,8 @@ async fn main() -> anyhow::Result<()> {
             ));
 
             let proxy_fut = proxy::run(cfg.clone(), observe, allowlist.clone());
-            let dns_fut = proxy::dns::run(
-                &cfg.proxy.dns_listen,
-                &cfg.proxy.dns_upstream,
-                allowlist,
-            );
+            let dns_fut =
+                proxy::dns::run(&cfg.proxy.dns_listen, &cfg.proxy.dns_upstream, allowlist);
 
             if let Some(ref mcp_cfg) = cfg.mcp {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
@@ -170,10 +171,12 @@ async fn main() -> anyhow::Result<()> {
                 let sidecar = names
                     .lines()
                     .find(|n| n.contains("devg-devg") || n.ends_with("-devg-1"))
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "no running devg sidecar found.\n\n  \
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no running devg sidecar found.\n\n  \
                          Start it with: devcontainer up --workspace-folder ."
-                    ))?;
+                        )
+                    })?;
                 cmd.arg(sidecar);
                 cmd.args(["devg", "why-denied"]);
                 if tail {

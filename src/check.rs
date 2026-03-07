@@ -144,7 +144,8 @@ mod tests {
 
     #[test]
     fn parse_sse_framed() {
-        let sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n";
+        let sse =
+            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n";
         let v = parse_mcp_response(sse).unwrap();
         assert_eq!(v["id"], 1);
     }

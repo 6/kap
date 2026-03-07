@@ -43,7 +43,11 @@ pub fn run(project_dir: &str) -> Result<()> {
     let content = lines.join("\n");
     if !content.is_empty() {
         std::fs::write(&env_path, content + "\n")?;
-        eprintln!("[init-env] wrote {} vars to {}", lines.len(), env_path.display());
+        eprintln!(
+            "[init-env] wrote {} vars to {}",
+            lines.len(),
+            env_path.display()
+        );
     } else if !env_path.exists() {
         // Only create empty file if none exists
         std::fs::write(&env_path, "")?;
@@ -72,10 +76,10 @@ fn load_env_file(path: &Path) -> std::collections::HashMap<String, String> {
 
 /// Parse devg.toml and collect all env var names referenced by MCP server configs.
 fn vars_from_config(path: &Path) -> Result<Vec<String>> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let config: crate::config::Config = toml::from_str(&content)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let config: crate::config::Config =
+        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
 
     let mut vars = Vec::new();
 

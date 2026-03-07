@@ -3,8 +3,8 @@
 /// Implements: metadata discovery, dynamic client registration, PKCE,
 /// authorization code flow with localhost callback.
 use anyhow::{Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hyper::service::service_fn;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -40,9 +40,10 @@ pub async fn run(_name: &str, upstream: &str) -> Result<StoredAuth> {
     let (code_verifier, code_challenge) = generate_pkce();
 
     // 4. Build authorization URL
-    let mut auth_url = Url::parse(&metadata.authorization_endpoint)
-        .context("invalid authorization_endpoint")?;
-    auth_url.query_pairs_mut()
+    let mut auth_url =
+        Url::parse(&metadata.authorization_endpoint).context("invalid authorization_endpoint")?;
+    auth_url
+        .query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &registration.client_id)
         .append_pair("redirect_uri", &redirect_uri)
@@ -124,8 +125,7 @@ pub fn write_auth_file(name: &str, auth: &StoredAuth, auth_dir: &str) -> Result<
         .with_context(|| format!("creating {}", auth_path.display()))?;
     let file_path = auth_path.join(format!("{name}.json"));
     let json = serde_json::to_string_pretty(auth)?;
-    write_private(&file_path, &json)
-        .with_context(|| format!("writing {}", file_path.display()))?;
+    write_private(&file_path, &json).with_context(|| format!("writing {}", file_path.display()))?;
     Ok(())
 }
 
@@ -172,9 +172,11 @@ async fn discover_metadata(http: &reqwest::Client, upstream_url: &Url) -> Result
                 registration_endpoint: metadata["registration_endpoint"]
                     .as_str()
                     .map(|s| s.to_string()),
-                scopes_supported: metadata["scopes_supported"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                scopes_supported: metadata["scopes_supported"].as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                }),
             })
         }
         _ => {
@@ -354,7 +356,11 @@ mod tests {
 
         // Verifier is base64url-encoded 32 bytes = 43 chars
         assert_eq!(verifier.len(), 43);
-        assert!(verifier.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
 
         // Challenge is SHA-256 of verifier, base64url = 43 chars
         assert_eq!(challenge.len(), 43);

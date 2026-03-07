@@ -122,7 +122,8 @@ mod tests {
 
     #[test]
     fn request_with_string_id() {
-        let json = r#"{"jsonrpc":"2.0","id":"abc-123","method":"tools/call","params":{"name":"test"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":"abc-123","method":"tools/call","params":{"name":"test"}}"#;
         let req: Request = serde_json::from_str(json).unwrap();
         assert_eq!(req.id, Some(Value::from("abc-123")));
         assert_eq!(req.method, "tools/call");

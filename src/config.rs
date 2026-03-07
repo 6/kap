@@ -66,11 +66,12 @@ impl Config {
             .filter_map(|s| {
                 // Try config upstream first, then fall back to auth file
                 let upstream = s.upstream.clone().or_else(|| {
-                    let path = std::path::Path::new(auth_dir)
-                        .join(format!("{}.json", s.name));
+                    let path = std::path::Path::new(auth_dir).join(format!("{}.json", s.name));
                     std::fs::read_to_string(&path)
                         .ok()
-                        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                        .and_then(|content| {
+                            serde_json::from_str::<serde_json::Value>(&content).ok()
+                        })
                         .and_then(|v| v["upstream"].as_str().map(String::from))
                 });
                 upstream
@@ -223,8 +224,14 @@ upstream = "https://mcp.example.com/fs"
         assert_eq!(mcp.servers.len(), 2);
 
         assert_eq!(mcp.servers[0].name, "github");
-        assert_eq!(mcp.servers[0].upstream.as_deref(), Some("https://mcp.github.com"));
-        assert_eq!(mcp.servers[0].allow_tools, vec!["get_pull_request", "list_issues"]);
+        assert_eq!(
+            mcp.servers[0].upstream.as_deref(),
+            Some("https://mcp.github.com")
+        );
+        assert_eq!(
+            mcp.servers[0].allow_tools,
+            vec!["get_pull_request", "list_issues"]
+        );
         assert_eq!(mcp.servers[0].deny_tools, vec!["create_repository"]);
 
         assert_eq!(mcp.servers[1].name, "filesystem");

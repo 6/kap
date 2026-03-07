@@ -173,8 +173,14 @@ mod tests {
         let path = dir.join("test.jsonl");
 
         let logger = ProxyLogger::new(path.to_str().unwrap());
-        logger.log(&ProxyLogEntry::new("a.com", "allowed", "GET")).await.unwrap();
-        logger.log(&ProxyLogEntry::new("b.com", "denied", "CONNECT")).await.unwrap();
+        logger
+            .log(&ProxyLogEntry::new("a.com", "allowed", "GET"))
+            .await
+            .unwrap();
+        logger
+            .log(&ProxyLogEntry::new("b.com", "denied", "CONNECT"))
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = content.trim().lines().collect();
@@ -195,7 +201,10 @@ mod tests {
         assert!(!dir.exists());
 
         let logger = ProxyLogger::new(path.to_str().unwrap());
-        logger.log(&ProxyLogEntry::new("test.com", "denied", "GET")).await.unwrap();
+        logger
+            .log(&ProxyLogEntry::new("test.com", "denied", "GET"))
+            .await
+            .unwrap();
 
         assert!(path.exists());
 

@@ -43,7 +43,10 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
             .filter_map(|(k, v)| {
                 let expanded = expand_env(v);
                 if expanded.is_empty() {
-                    eprintln!("[mcp] {}: skipping header {k} (empty after env expansion)", server_cfg.name);
+                    eprintln!(
+                        "[mcp] {}: skipping header {k} (empty after env expansion)",
+                        server_cfg.name
+                    );
                     None
                 } else {
                     Some((k.clone(), expanded))
@@ -75,8 +78,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                 }
             }
         } else {
-            let auth_path =
-                Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
+            let auth_path = Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
             match StoredAuth::load(&auth_path) {
                 Ok(auth) => {
                     // upstream from config wins, otherwise fall back to auth file
@@ -117,10 +119,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
         };
         let filter = ToolFilter::new(&server_cfg.allow_tools, &server_cfg.deny_tools);
 
-        eprintln!(
-            "[mcp] {} → {}",
-            server_cfg.name, client.upstream_url
-        );
+        eprintln!("[mcp] {} → {}", server_cfg.name, client.upstream_url);
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
     }
 
@@ -139,9 +138,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                 async move { handle_request(req, &state).await }
             });
 
-            if let Err(e) = http1::Builder::new()
-                .serve_connection(io, service)
-                .await
+            if let Err(e) = http1::Builder::new().serve_connection(io, service).await
                 && !e.to_string().contains("error shutting down connection")
             {
                 eprintln!("[mcp] connection error: {e}");
@@ -186,7 +183,9 @@ async fn handle_request(
     };
 
     match rpc_req.method.as_str() {
-        "tools/call" => handle_tools_call(server, &rpc_req, &body, &state.logger, &server_name).await,
+        "tools/call" => {
+            handle_tools_call(server, &rpc_req, &body, &state.logger, &server_name).await
+        }
         "tools/list" => handle_tools_list(server, &body, &state.logger, &server_name).await,
         _ => forward_raw(server, &body, &state.logger, &server_name).await,
     }
@@ -234,11 +233,7 @@ async fn handle_tools_list(
     logger: &ProxyLogger,
     server_name: &str,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let entry = ProxyLogEntry::new(
-        &format!("mcp/{server_name}"),
-        "allowed",
-        "tools/list",
-    );
+    let entry = ProxyLogEntry::new(&format!("mcp/{server_name}"), "allowed", "tools/list");
     let _ = logger.log(&entry).await;
 
     let (status, resp_body) = match server.client.forward(body).await {
@@ -309,9 +304,7 @@ pub fn list_auth_files(auth_dir: &str) -> Vec<String> {
         .filter_map(|e| {
             let path = e.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(String::from)
+                path.file_stem().and_then(|s| s.to_str()).map(String::from)
             } else {
                 None
             }
@@ -381,8 +374,7 @@ mod tests {
                                 }
                             }),
                             "tools/call" => {
-                                let tool_name =
-                                    rpc["params"]["name"].as_str().unwrap_or("unknown");
+                                let tool_name = rpc["params"]["name"].as_str().unwrap_or("unknown");
                                 serde_json::json!({
                                     "jsonrpc": "2.0",
                                     "id": id,
@@ -417,11 +409,7 @@ mod tests {
     }
 
     /// Start the MCP proxy with a given server config, return the proxy port.
-    async fn start_mcp_proxy(
-        upstream_port: u16,
-        allow_tools: &[&str],
-        deny_tools: &[&str],
-    ) -> u16 {
+    async fn start_mcp_proxy(upstream_port: u16, allow_tools: &[&str], deny_tools: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -436,9 +424,17 @@ mod tests {
             expires_at: None,
         };
 
-        let client = UpstreamClient::new(format!("http://127.0.0.1:{upstream_port}"), auth, vec![], None);
+        let client = UpstreamClient::new(
+            format!("http://127.0.0.1:{upstream_port}"),
+            auth,
+            vec![],
+            None,
+        );
         let filter_obj = ToolFilter::new(
-            &allow_tools.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &allow_tools
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
             &deny_tools.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         );
 
@@ -489,7 +485,11 @@ mod tests {
         panic!("MCP proxy did not start");
     }
 
-    async fn post_jsonrpc(port: u16, server_name: &str, body: &serde_json::Value) -> serde_json::Value {
+    async fn post_jsonrpc(
+        port: u16,
+        server_name: &str,
+        body: &serde_json::Value,
+    ) -> serde_json::Value {
         let client = reqwest::Client::new();
         let resp = client
             .post(format!("http://127.0.0.1:{port}/{server_name}"))
@@ -503,8 +503,7 @@ mod tests {
     #[tokio::test]
     async fn tools_list_is_filtered() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port =
-            start_mcp_proxy(upstream_port, &["read_file", "search_code"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file", "search_code"], &[]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -522,8 +521,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_allowed_forwards() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port =
-            start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -544,8 +542,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_denied_returns_error() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port =
-            start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -561,17 +558,18 @@ mod tests {
         // Should be denied with JSON-RPC error
         assert!(resp["error"].is_object());
         assert_eq!(resp["error"]["code"], -32602);
-        assert!(resp["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("delete_file"));
+        assert!(
+            resp["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("delete_file")
+        );
     }
 
     #[tokio::test]
     async fn deny_overrides_allow() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port =
-            start_mcp_proxy(upstream_port, &["*"], &["delete_*"]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &["delete_*"]).await;
 
         // read_file should be allowed (matches *)
         let resp = post_jsonrpc(
@@ -718,8 +716,7 @@ mod tests {
     #[tokio::test]
     async fn non_tool_methods_forwarded_transparently() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port =
-            start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
 
         let resp = post_jsonrpc(
             proxy_port,

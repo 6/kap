@@ -34,10 +34,7 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let dc_json: serde_json::Value = serde_json::from_str(&dc_content)
         .with_context(|| format!("parsing {}", devcontainer_json_path.display()))?;
 
-    let service_name = dc_json["service"]
-        .as_str()
-        .unwrap_or("app")
-        .to_string();
+    let service_name = dc_json["service"].as_str().unwrap_or("app").to_string();
 
     // Build the dockerComposeFile array for the instructions
     let compose_files: Vec<String> = if let Some(arr) = dc_json["dockerComposeFile"].as_array() {
@@ -77,7 +74,10 @@ fn run_existing(_project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let mut notes: Vec<String> = Vec::new();
 
     if dc_obj.get("initializeCommand").is_some() {
-        notes.push("initializeCommand already set. Add `devg init-env` to your existing command.".to_string());
+        notes.push(
+            "initializeCommand already set. Add `devg init-env` to your existing command."
+                .to_string(),
+        );
     } else {
         dc_obj["initializeCommand"] = serde_json::Value::String("devg init-env".to_string());
     }

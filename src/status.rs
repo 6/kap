@@ -33,7 +33,10 @@ pub fn run() -> Result<()> {
 
     match exec_in(&app, &["printenv", "HTTP_PROXY"]) {
         Some(val) if val.contains(PROXY_IP) => ok("HTTP_PROXY set", &mut pass),
-        Some(_) => bad("HTTP_PROXY points to wrong address (overlay may not be last in dockerComposeFile)", &mut fail),
+        Some(_) => bad(
+            "HTTP_PROXY points to wrong address (overlay may not be last in dockerComposeFile)",
+            &mut fail,
+        ),
         None => bad("HTTP_PROXY not set (overlay may not be applied)", &mut fail),
     }
 
@@ -42,7 +45,11 @@ pub fn run() -> Result<()> {
         _ => bad("DNS resolver not pointing to proxy", &mut fail),
     }
 
-    if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")]) == 0 {
+    if exec_exit_code(
+        &app,
+        &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")],
+    ) == 0
+    {
         ok("proxy reachable", &mut pass);
     } else {
         bad("proxy not reachable on :3128", &mut fail);
@@ -68,13 +75,26 @@ pub fn run() -> Result<()> {
     match exec_in(&app, &["dig", "+short", "+time=3", "devg-test.invalid"]) {
         Some(out) if out.is_empty() => ok("DNS blocks unlisted domains", &mut pass),
         None => ok("DNS blocks unlisted domains", &mut pass),
-        _ => bad("DNS resolved unlisted domain (forwarder may not be active)", &mut fail),
+        _ => bad(
+            "DNS resolved unlisted domain (forwarder may not be active)",
+            &mut fail,
+        ),
     }
 
     // HTTPS block test
     let http_code = exec_in(
         &app,
-        &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://devg-test.invalid"],
+        &[
+            "curl",
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "5",
+            "https://devg-test.invalid",
+        ],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
     if code == "403" || code == "000" || code.is_empty() {
@@ -102,8 +122,8 @@ pub fn run() -> Result<()> {
                 }
             } else if server.headers.is_empty() {
                 // OAuth server — check auth file exists
-                let auth_path = std::path::Path::new(&host_auth_dir)
-                    .join(format!("{}.json", server.name));
+                let auth_path =
+                    std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
                 if !auth_path.exists() {
                     let hint = if available.is_empty() {
                         format!("run `devg mcp add {} <upstream>`", server.name)
@@ -114,7 +134,10 @@ pub fn run() -> Result<()> {
                             server.name
                         )
                     };
-                    bad(&format!("{}: no auth registered ({})", server.name, hint), &mut fail);
+                    bad(
+                        &format!("{}: no auth registered ({})", server.name, hint),
+                        &mut fail,
+                    );
                 }
             }
         }
@@ -124,10 +147,17 @@ pub fn run() -> Result<()> {
         if has_auth_mount {
             ok("auth dir mounted in sidecar", &mut pass);
         } else {
-            bad("auth dir not mounted (add ~/.devg/auth:/etc/devg/auth to compose volumes)", &mut fail);
+            bad(
+                "auth dir not mounted (add ~/.devg/auth:/etc/devg/auth to compose volumes)",
+                &mut fail,
+            );
         }
 
-        if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
+        if exec_exit_code(
+            &app,
+            &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")],
+        ) == 0
+        {
             ok("MCP proxy reachable", &mut pass);
         } else {
             bad("MCP proxy not reachable on :3129", &mut fail);
@@ -155,7 +185,11 @@ pub fn run() -> Result<()> {
     // Recent denials (from sidecar proxy log)
     let denied_count = exec_in(
         &sidecar,
-        &["sh", "-c", "grep -c '\"denied\"' /var/log/devg/proxy.jsonl 2>/dev/null || echo 0"],
+        &[
+            "sh",
+            "-c",
+            "grep -c '\"denied\"' /var/log/devg/proxy.jsonl 2>/dev/null || echo 0",
+        ],
     )
     .and_then(|s| s.trim().parse::<u64>().ok())
     .unwrap_or(0);
@@ -221,7 +255,12 @@ fn find_containers() -> Result<(String, String)> {
             continue;
         }
         let inspect = Command::new("docker")
-            .args(["inspect", "--format", "{{json .NetworkSettings.Networks}}", name])
+            .args([
+                "inspect",
+                "--format",
+                "{{json .NetworkSettings.Networks}}",
+                name,
+            ])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())

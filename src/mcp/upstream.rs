@@ -63,7 +63,11 @@ impl UpstreamClient {
     }
 
     /// Create a client with a simple static Bearer token (no refresh).
-    pub fn with_static_token(upstream_url: String, token: String, extra_headers: Vec<(String, String)>) -> Self {
+    pub fn with_static_token(
+        upstream_url: String,
+        token: String,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
         let auth = StoredAuth {
             upstream: upstream_url.clone(),
             client_id: String::new(),
@@ -154,13 +158,17 @@ impl UpstreamClient {
             let lock_path = path.with_extension("lock");
             let lock_file = std::fs::File::create(&lock_path)
                 .with_context(|| format!("creating lock file {}", lock_path.display()))?;
-            lock_file.lock_exclusive()
+            lock_file
+                .lock_exclusive()
                 .with_context(|| format!("acquiring lock on {}", lock_path.display()))?;
 
             // Re-read file — another container may have already refreshed
             if let Ok(fresh) = StoredAuth::load(path) {
                 if !fresh.is_expired() {
-                    eprintln!("[mcp] token for {} already refreshed by another process", self.upstream_url);
+                    eprintln!(
+                        "[mcp] token for {} already refreshed by another process",
+                        self.upstream_url
+                    );
                     *auth = fresh;
                     // lock released on drop
                     return Ok(());
@@ -174,7 +182,10 @@ impl UpstreamClient {
             // Write refreshed tokens to shared file (still holding lock)
             if let Ok(json) = serde_json::to_string_pretty(&*auth) {
                 if let Err(e) = super::auth::write_private(path, &json) {
-                    eprintln!("[mcp] warning: failed to persist refreshed tokens to {}: {e}", path.display());
+                    eprintln!(
+                        "[mcp] warning: failed to persist refreshed tokens to {}: {e}",
+                        path.display()
+                    );
                 }
             }
             // lock released on drop of lock_file
