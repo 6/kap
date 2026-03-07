@@ -119,26 +119,22 @@ The daemon runs on the host. All API endpoints require a bearer token issued dur
 
 `kap up` starts two containers on an internal Docker network: your app container (isolated, no internet) and a kap sidecar (controls all outbound access). The sidecar pulls from `ghcr.io/6/kap:latest` by default, or set `[compose] build` in `kap.toml` to build from source.
 
-```
-┌──────────────────────────────────────────────────┐
-│ Internal network                                  │
-│                                                   │
-│  ┌──────────────┐    ┌──────────────────┐         │
-│  │ App container │    │ kap sidecar      │         │
-│  │  (isolated)   │    │                  │         │
-│  │  HTTP_PROXY ──┼───►│  domain proxy    │──► Internet
-│  │               │    │  :3128           │         │
-│  │  DNS ─────────┼───►│  DNS forwarder   │──► Upstream DNS
-│  │               │    │  :53             │         │
-│  │  MCP servers ─┼───►│  MCP proxy       │──► MCP servers
-│  │  via http://  │    │  :3129           │         │
-│  │  proxy:3129   │    │                  │         │
-│  │  gh/aws/etc ──┼───►│  CLI proxy       │──► APIs
-│  │  (shims)      │    │  :3130           │         │
-│  │               │    │                  │         │
-│  │  (no tokens)  │    │  (credentials)   │         │
-│  └──────────────┘    └──────────────────┘         │
-└──────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    subgraph "Internal network"
+        App["App container<br/>(isolated, no tokens)"]
+        subgraph "kap sidecar (credentials)"
+            DP["Domain proxy :3128"]
+            DNS["DNS forwarder :53"]
+            MCP["MCP proxy :3129"]
+            CLI["CLI proxy :3130"]
+        end
+    end
+
+    App -- "HTTP_PROXY" --> DP --> Internet
+    App -- "DNS" --> DNS --> Upstream_DNS["Upstream DNS"]
+    App -- "MCP" --> MCP --> MCP_Servers["MCP servers"]
+    App -- "gh, aws, ..." --> CLI --> APIs
 ```
 
 - The app container has **no external network route** (Docker `internal: true`, no default gateway). All traffic goes through the sidecar.
