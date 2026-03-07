@@ -161,6 +161,14 @@ body {
   cursor: pointer;
 }
 .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+
+#project-select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; font-family: inherit; font-size: 0.85em;
+  outline: none; max-width: 160px;
+}
+#project-select:focus { border-color: var(--accent); }
+#project-bar { display: none; }
 </style>
 </head>
 <body>
@@ -168,6 +176,7 @@ body {
 <div class="header">
   <h1>devg</h1>
   <div class="header-right">
+    <span id="project-bar"><select id="project-select" onchange="switchProject()"></select></span>
     <button class="icon-btn" onclick="openSettings()" title="Settings">⚙</button>
   </div>
 </div>
@@ -221,6 +230,7 @@ let logWs = null;
 let agentWs = null;
 let logFilter = 'all';
 let currentSession = null;
+let selectedProject = localStorage.getItem('devg_project') || null;
 
 // --- Auth ---
 async function init() {
@@ -243,13 +253,24 @@ async function init() {
       '<div class="empty">No token. Scan the QR code from<br><code>devg remote pair</code></div>';
     return;
   }
+  await loadContainers();
   loadStatus();
   loadSettings();
 }
 
+function projectQuery() {
+  return selectedProject ? 'project=' + encodeURIComponent(selectedProject) : '';
+}
+
 async function apiFetch(path, opts = {}) {
   const token = opts.pairingToken || TOKEN;
-  const res = await fetch(BASE + path, {
+  // Append project param unless this is the containers or pair endpoint
+  let url = path;
+  if (selectedProject && !path.startsWith('/api/containers') && !path.startsWith('/api/pair')) {
+    const sep = path.includes('?') ? '&' : '?';
+    url = path + sep + projectQuery();
+  }
+  const res = await fetch(BASE + url, {
     method: opts.method || 'GET',
     headers: {
       'Authorization': 'Bearer ' + token,
@@ -258,6 +279,56 @@ async function apiFetch(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
   return res.json();
+}
+
+function wsUrl(path) {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const params = [`token=${TOKEN}`];
+  if (selectedProject) params.push(projectQuery());
+  return `${proto}//${location.host}${path}?${params.join('&')}`;
+}
+
+// --- Project selector ---
+async function loadContainers() {
+  try {
+    const containers = await apiFetch('/api/containers');
+    const bar = document.getElementById('project-bar');
+    const sel = document.getElementById('project-select');
+    if (!containers.length) {
+      bar.style.display = 'none';
+      selectedProject = null;
+      return;
+    }
+    if (containers.length === 1) {
+      bar.style.display = 'none';
+      selectedProject = containers[0].project;
+      localStorage.setItem('devg_project', selectedProject);
+      return;
+    }
+    // Multiple projects — show selector
+    bar.style.display = 'inline';
+    sel.innerHTML = containers.map(c =>
+      `<option value="${esc(c.project)}">${esc(c.project)}</option>`
+    ).join('');
+    // Restore previous selection if still valid
+    const valid = containers.some(c => c.project === selectedProject);
+    if (!valid) selectedProject = containers[0].project;
+    sel.value = selectedProject;
+    localStorage.setItem('devg_project', selectedProject);
+  } catch(e) {
+    console.error('loadContainers failed', e);
+  }
+}
+
+function switchProject() {
+  const sel = document.getElementById('project-select');
+  selectedProject = sel.value;
+  localStorage.setItem('devg_project', selectedProject);
+  // Close any open WebSockets and reload current view
+  if (logWs) { logWs.close(); logWs = null; }
+  if (agentWs) { agentWs.close(); agentWs = null; }
+  const activeTab = document.querySelector('.tab.active')?.dataset.view || 'status';
+  switchTab(activeTab);
 }
 
 // --- Tabs ---
@@ -312,8 +383,8 @@ async function connectLogs() {
     const endpoint = logFilter === 'denied' ? '/api/logs/denied' : '/api/logs?limit=50';
     const entries = await apiFetch(endpoint);
     el.innerHTML = '';
-    for (const entry of entries.reverse()) {
-      el.prepend(makeLogLine(entry));
+    for (const entry of entries) {
+      el.append(makeLogLine(entry));
     }
     if (!entries.length) el.innerHTML = '<div class="empty">no log entries yet</div>';
   } catch(e) {
@@ -322,8 +393,7 @@ async function connectLogs() {
 
   // Then connect WebSocket for live updates
   if (logWs && logWs.readyState <= 1) { logWs.close(); }
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  logWs = new WebSocket(`${proto}//${location.host}/ws/logs?token=${TOKEN}`);
+  logWs = new WebSocket(wsUrl('/ws/logs'));
   logWs.onmessage = (e) => {
     try {
       const entry = JSON.parse(e.data);
@@ -412,8 +482,7 @@ function renderEvent(ev) {
 
 function connectAgentWs(id) {
   if (agentWs) agentWs.close();
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  agentWs = new WebSocket(`${proto}//${location.host}/ws/agent/${id}?token=${TOKEN}`);
+  agentWs = new WebSocket(wsUrl(`/ws/agent/${id}`));
   agentWs.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);

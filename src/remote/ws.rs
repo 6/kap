@@ -21,12 +21,13 @@ type WsStream = WebSocketStream<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded
 /// Handle WebSocket upgrade requests.
 pub async fn handle(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Response<Body>> {
     let path = req.uri().path().to_string();
+    let project = extract_project(&req);
 
     match path.as_str() {
-        "/ws/logs" => ws_upgrade(req, stream_logs),
+        "/ws/logs" => ws_upgrade(req, move |ws| stream_logs(ws, project)),
         p if p.starts_with("/ws/agent/") => {
             let session_id = p["/ws/agent/".len()..].to_string();
-            ws_upgrade(req, move |ws| stream_agent(ws, session_id))
+            ws_upgrade(req, move |ws| stream_agent(ws, session_id, project))
         }
         _ => {
             let _ = state;
@@ -36,6 +37,13 @@ pub async fn handle(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<R
                 .unwrap())
         }
     }
+}
+
+fn extract_project(req: &Request<Incoming>) -> Option<String> {
+    req.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|p| p.strip_prefix("project=").map(|v| v.to_string()))
+    })
 }
 
 /// Generic WebSocket upgrade that spawns a handler future.
@@ -81,8 +89,8 @@ where
         .unwrap())
 }
 
-async fn stream_logs(mut ws: WsStream) -> Result<()> {
-    let (_app, sidecar) = containers::find_containers()?;
+async fn stream_logs(mut ws: WsStream, project: Option<String>) -> Result<()> {
+    let (_app, sidecar) = resolve_ws_containers(project.as_deref())?;
 
     let mut child = containers::exec_stream(
         &sidecar,
@@ -114,8 +122,8 @@ async fn stream_logs(mut ws: WsStream) -> Result<()> {
     Ok(())
 }
 
-async fn stream_agent(mut ws: WsStream, session_id: String) -> Result<()> {
-    let (app, _sidecar) = containers::find_containers()?;
+async fn stream_agent(mut ws: WsStream, session_id: String, project: Option<String>) -> Result<()> {
+    let (app, _sidecar) = resolve_ws_containers(project.as_deref())?;
 
     // Find the session file path
     let path_output = containers::exec_in(
@@ -170,4 +178,53 @@ async fn stream_agent(mut ws: WsStream, session_id: String) -> Result<()> {
 
     let _ = child.kill().await;
     Ok(())
+}
+
+fn resolve_ws_containers(project: Option<&str>) -> Result<(String, String)> {
+    match project {
+        Some(p) => containers::find_by_project(p),
+        None => {
+            let groups = containers::find_all_containers()?;
+            match groups.len() {
+                0 => anyhow::bail!("no running devcontainer found"),
+                1 => Ok((groups[0].app.clone(), groups[0].sidecar.clone())),
+                n => anyhow::bail!("{n} devcontainers running; specify &project=X"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn parse_project_from_query(query: &str) -> Option<String> {
+        query
+            .split('&')
+            .find_map(|p| p.strip_prefix("project=").map(|v| v.to_string()))
+    }
+
+    #[test]
+    fn extract_project_from_query_string() {
+        assert_eq!(
+            parse_project_from_query("token=abc&project=myproj"),
+            Some("myproj".into())
+        );
+    }
+
+    #[test]
+    fn extract_project_missing() {
+        assert_eq!(parse_project_from_query("token=abc"), None);
+    }
+
+    #[test]
+    fn extract_project_first_param() {
+        assert_eq!(
+            parse_project_from_query("project=foo&token=abc"),
+            Some("foo".into())
+        );
+    }
+
+    #[test]
+    fn extract_project_empty_value() {
+        assert_eq!(parse_project_from_query("project="), Some("".into()));
+    }
 }

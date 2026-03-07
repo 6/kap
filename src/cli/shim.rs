@@ -5,11 +5,22 @@
 use anyhow::Result;
 use base64::Engine;
 
-const DEVG_HOST: &str = "172.28.0.3";
 const DEVG_CLI_PORT: u16 = 3130;
 
+fn sidecar_host() -> String {
+    std::env::var("HTTP_PROXY")
+        .ok()
+        .and_then(|v| {
+            v.strip_prefix("http://")
+                .and_then(|rest| rest.split(':').next())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| "172.28.0.3".to_string())
+}
+
 pub async fn run(tool: &str, args: &[String]) -> Result<()> {
-    let url = format!("http://{DEVG_HOST}:{DEVG_CLI_PORT}/{tool}");
+    let host = sidecar_host();
+    let url = format!("http://{host}:{DEVG_CLI_PORT}/{tool}");
 
     // Bypass HTTP_PROXY - talk directly to the sidecar on the internal network
     // Send current directory so sidecar can cd into the workspace

@@ -19,23 +19,24 @@ pub async fn handle(
     let method = req.method().clone();
 
     match (method, path.as_str()) {
-        (hyper::Method::GET, "/api/status") => handle_status(state).await,
+        (hyper::Method::GET, "/api/containers") => handle_containers().await,
+        (hyper::Method::GET, "/api/status") => handle_status(&req, state).await,
         (hyper::Method::GET, "/api/logs") => handle_logs(&req, state).await,
-        (hyper::Method::GET, "/api/logs/denied") => handle_logs_denied(state).await,
+        (hyper::Method::GET, "/api/logs/denied") => handle_logs_denied(&req, state).await,
         (hyper::Method::POST, "/api/pair") => handle_pair(state).await,
-        (hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(state).await,
+        (hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(&req, state).await,
         (hyper::Method::GET, p) if p.starts_with("/api/agent/session/") => {
             let rest = &p["/api/agent/session/".len()..];
             if let Some(id) = rest.strip_suffix("/diff") {
-                handle_agent_diff(id, state).await
+                handle_agent_diff(&req, id, state).await
             } else {
-                handle_agent_session(rest, state).await
+                handle_agent_session(&req, rest, state).await
             }
         }
         (hyper::Method::POST, p) if p.starts_with("/api/agent/session/") => {
             let rest = p["/api/agent/session/".len()..].to_string();
             if let Some(id) = rest.strip_suffix("/cancel") {
-                handle_agent_cancel(id, state).await
+                handle_agent_cancel(&req, id, state).await
             } else if let Some(id) = rest.strip_suffix("/message") {
                 handle_agent_message(req, id, state).await
             } else {
@@ -81,8 +82,16 @@ struct ProxyStatus {
     denied_count: u64,
 }
 
-async fn handle_status(state: &Arc<RemoteState>) -> Result<Response<Body>> {
-    let (app_name, sidecar_name) = match containers::find_containers() {
+async fn handle_containers() -> Result<Response<Body>> {
+    let groups = containers::find_all_containers()?;
+    Ok(json_response(StatusCode::OK, &groups))
+}
+
+async fn handle_status(
+    req: &Request<hyper::body::Incoming>,
+    state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app_name, sidecar_name) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             let status = StatusResponse {
@@ -99,10 +108,19 @@ async fn handle_status(state: &Arc<RemoteState>) -> Result<Response<Body>> {
         }
     };
 
+    // Read sidecar IP from the app container's HTTP_PROXY env var
+    let proxy_ip = containers::exec_in(&app_name, &["printenv", "HTTP_PROXY"])
+        .and_then(|v| {
+            v.strip_prefix("http://")
+                .and_then(|rest| rest.split(':').next())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| "172.28.0.3".to_string());
+
     // Check if proxy is reachable
     let proxy_up = containers::exec_exit_code(
         &app_name,
-        &["bash", "-c", "echo > /dev/tcp/172.28.0.3/3128"],
+        &["bash", "-c", &format!("echo > /dev/tcp/{proxy_ip}/3128")],
     ) == 0;
 
     // Get denied count from sidecar
@@ -146,7 +164,7 @@ async fn handle_logs(
     let query = req.uri().query().unwrap_or("");
     let limit = parse_query_param(query, "limit").unwrap_or(100);
 
-    let (_app, sidecar) = match containers::find_containers() {
+    let (_app, sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -159,6 +177,7 @@ async fn handle_logs(
     let raw =
         containers::exec_in(&sidecar, &["cat", "/var/log/devg/proxy.jsonl"]).unwrap_or_default();
 
+    // Return newest first (reverse chronological) — natural for display and pagination
     let entries: Vec<serde_json::Value> = raw
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
@@ -166,16 +185,16 @@ async fn handle_logs(
         .into_iter()
         .rev()
         .take(limit)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
         .collect();
 
     Ok(json_response(StatusCode::OK, &entries))
 }
 
-async fn handle_logs_denied(_state: &Arc<RemoteState>) -> Result<Response<Body>> {
-    let (_app, sidecar) = match containers::find_containers() {
+async fn handle_logs_denied(
+    req: &Request<hyper::body::Incoming>,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (_app, sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -221,8 +240,11 @@ async fn handle_pair(state: &Arc<RemoteState>) -> Result<Response<Body>> {
     ))
 }
 
-async fn handle_agent_sessions(_state: &Arc<RemoteState>) -> Result<Response<Body>> {
-    let (app, _sidecar) = match containers::find_containers() {
+async fn handle_agent_sessions(
+    req: &Request<hyper::body::Incoming>,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -237,10 +259,11 @@ async fn handle_agent_sessions(_state: &Arc<RemoteState>) -> Result<Response<Bod
 }
 
 async fn handle_agent_session(
+    req: &Request<hyper::body::Incoming>,
     session_id: &str,
     _state: &Arc<RemoteState>,
 ) -> Result<Response<Body>> {
-    let (app, _sidecar) = match containers::find_containers() {
+    let (app, _sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -263,8 +286,12 @@ async fn handle_agent_session(
     }
 }
 
-async fn handle_agent_diff(session_id: &str, _state: &Arc<RemoteState>) -> Result<Response<Body>> {
-    let (app, _sidecar) = match containers::find_containers() {
+async fn handle_agent_diff(
+    req: &Request<hyper::body::Incoming>,
+    session_id: &str,
+    _state: &Arc<RemoteState>,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -294,10 +321,11 @@ struct DiffResponse {
 }
 
 async fn handle_agent_cancel(
+    req: &Request<hyper::body::Incoming>,
     session_id: &str,
     _state: &Arc<RemoteState>,
 ) -> Result<Response<Body>> {
-    let (app, _sidecar) = match containers::find_containers() {
+    let (app, _sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -363,7 +391,7 @@ async fn handle_agent_message(
     session_id: &str,
     _state: &Arc<RemoteState>,
 ) -> Result<Response<Body>> {
-    let (app, _sidecar) = match containers::find_containers() {
+    let (app, _sidecar) = match resolve_containers(&req) {
         Ok(pair) => pair,
         Err(_) => {
             return Ok(json_response(
@@ -465,6 +493,38 @@ fn parse_query_param(query: &str, key: &str) -> Option<usize> {
         let (k, v) = pair.split_once('=')?;
         if k == key { v.parse().ok() } else { None }
     })
+}
+
+fn parse_query_str_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        if k == key { Some(v) } else { None }
+    })
+}
+
+/// Resolve which containers to use based on `?project=X` query param.
+/// If no project is specified and exactly one is running, use it.
+/// If multiple are running and no project is specified, return an error.
+fn resolve_containers<B>(req: &Request<B>) -> Result<(String, String)> {
+    let query = req.uri().query().unwrap_or("");
+    let project = parse_query_str_param(query, "project");
+
+    match project {
+        Some(p) => containers::find_by_project(p),
+        None => {
+            let groups = containers::find_all_containers()?;
+            match groups.len() {
+                0 => anyhow::bail!(
+                    "no running devcontainer found with devg networking.\n\n  \
+                     Start it with: devcontainer up"
+                ),
+                1 => Ok((groups[0].app.clone(), groups[0].sidecar.clone())),
+                n => anyhow::bail!(
+                    "{n} devcontainers running; specify ?project=X (use GET /api/containers to list)"
+                ),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -596,5 +656,64 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["session_token"], "tok123");
         assert_eq!(v["device_id"], "dev456");
+    }
+
+    #[test]
+    fn parse_query_str_param_works() {
+        assert_eq!(
+            parse_query_str_param("project=myproj&limit=50", "project"),
+            Some("myproj")
+        );
+        assert_eq!(
+            parse_query_str_param("token=abc&project=foo", "project"),
+            Some("foo")
+        );
+        assert_eq!(parse_query_str_param("limit=50", "project"), None);
+        assert_eq!(parse_query_str_param("", "project"), None);
+    }
+
+    #[test]
+    fn parse_query_str_param_value_with_equals() {
+        // e.g. token=abc=def — value is everything after first =
+        assert_eq!(parse_query_str_param("key=a=b", "key"), Some("a=b"));
+    }
+
+    #[test]
+    fn parse_query_str_param_empty_value() {
+        assert_eq!(
+            parse_query_str_param("project=&limit=50", "project"),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn parse_query_str_param_first_match_wins() {
+        assert_eq!(
+            parse_query_str_param("project=first&project=second", "project"),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn resolve_containers_extracts_project_from_query() {
+        // Build a request with ?project=myproj
+        let req = hyper::Request::builder()
+            .uri("http://localhost/api/status?project=myproj")
+            .body(())
+            .unwrap();
+        let query = req.uri().query().unwrap_or("");
+        let project = parse_query_str_param(query, "project");
+        assert_eq!(project, Some("myproj"));
+    }
+
+    #[test]
+    fn resolve_containers_no_project_in_query() {
+        let req = hyper::Request::builder()
+            .uri("http://localhost/api/status?limit=50")
+            .body(())
+            .unwrap();
+        let query = req.uri().query().unwrap_or("");
+        let project = parse_query_str_param(query, "project");
+        assert_eq!(project, None);
     }
 }
