@@ -25,7 +25,14 @@ pub async fn add(name: &str, upstream: &str, reauth: bool) -> Result<()> {
         return Ok(());
     }
 
-    let stored = auth::run(name, upstream).await?;
+    let mut stored = auth::run(name, upstream).await?;
+
+    // Verify tools/list works. If not, try common MCP subpaths.
+    let mcp_url = discover_mcp_endpoint(upstream, &stored.access_token).await;
+    if let Some(ref url) = mcp_url {
+        stored.upstream = url.clone();
+    }
+
     auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
     eprintln!("[auth] tokens saved to {}", file_path.display());
 
@@ -107,6 +114,62 @@ pub fn remove(name: &str) -> Result<()> {
 
     eprintln!("Removed {name}");
     Ok(())
+}
+
+/// Try tools/list at the given URL and common subpaths (/mcp).
+/// Returns the working URL, or None if nothing works.
+async fn discover_mcp_endpoint(base_url: &str, token: &str) -> Option<String> {
+    let base = base_url.trim_end_matches('/');
+    let candidates = [base.to_string(), format!("{base}/mcp")];
+
+    for url in &candidates {
+        eprintln!("[auth] trying tools/list at {url}...");
+        match try_tools_list(url, token).await {
+            Ok(count) => {
+                eprintln!("[auth] success: {count} tools available at {url}");
+                return Some(url.clone());
+            }
+            Err(e) => {
+                eprintln!("[auth] {url}: {e}");
+            }
+        }
+    }
+
+    eprintln!("[auth] warning: tools/list failed at all endpoints");
+    eprintln!("[auth] you may need to set `upstream` explicitly in devg.toml");
+    None
+}
+
+async fn try_tools_list(url: &str, token: &str) -> Result<usize> {
+    let http = reqwest::Client::new();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+    let resp = http
+        .post(url)
+        .bearer_auth(token)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("connecting to MCP server")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+
+    let json: serde_json::Value = resp.json().await.context("parsing response")?;
+    if let Some(err) = json.get("error") {
+        anyhow::bail!("JSON-RPC error: {err}");
+    }
+    let count = json["result"]["tools"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    Ok(count)
 }
 
 #[cfg(test)]

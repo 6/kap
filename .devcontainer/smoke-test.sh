@@ -85,11 +85,25 @@ else
   fail "MCP proxy returned $MCP_STATUS (expected 404)"
 fi
 
+echo "[8] auth dir mounted in sidecar"
+# Check from inside the app container that the sidecar has the auth dir
+AUTH_CHECK=$(curl -s --max-time 5 --noproxy '*' \
+  -X POST "http://$PROXY_IP:3129/linear" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || true)
+if echo "$AUTH_CHECK" | grep -q '"tools"'; then
+  pass "auth dir mounted (linear server loaded)"
+elif echo "$AUTH_CHECK" | grep -q 'unknown MCP server'; then
+  fail "auth dir not mounted in sidecar (add ~/.devg/auth:/etc/devg/auth to compose volumes)"
+else
+  skip "cannot determine auth mount status"
+fi
+
 # --- Real MCP test (Context7, requires CONTEXT7_API_KEY on the proxy) ---
 echo ""
 echo "--- MCP end-to-end (Context7) ---"
 
-echo "[8] tools/list through MCP proxy to Context7"
+echo "[9] tools/list through MCP proxy to Context7 (optional)"
 # The proxy sidecar has CONTEXT7_API_KEY. If the server is configured,
 # we can call tools/list and verify we get real tools back.
 MCP_RESP=$(curl -s --max-time 10 --noproxy '*' \
@@ -113,7 +127,7 @@ fi
 echo ""
 echo "--- End-to-end ---"
 
-echo "[9] cargo fetch through proxy"
+echo "[10] cargo fetch through proxy"
 if cargo fetch --manifest-path /workspaces/devcontainer-guard/Cargo.toml 2>&1 | tail -1; then
   pass "cargo fetch succeeded (DNS + proxy + TLS all working)"
 else

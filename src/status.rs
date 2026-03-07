@@ -119,6 +119,14 @@ pub fn run() -> Result<()> {
             }
         }
 
+        // Check auth dir is mounted in sidecar
+        let has_auth_mount = exec_exit_code(&sidecar, &["test", "-d", "/etc/devg/auth"]) == 0;
+        if has_auth_mount {
+            ok("auth dir mounted in sidecar", &mut pass);
+        } else {
+            bad("auth dir not mounted (add ~/.devg/auth:/etc/devg/auth to compose volumes)", &mut fail);
+        }
+
         if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
             ok("MCP proxy reachable", &mut pass);
         } else {

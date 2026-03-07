@@ -42,3 +42,4 @@ headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
 
 [[mcp.servers]]
 name = "linear"
+upstream = "https://mcp.linear.app/mcp"
