@@ -1,3 +1,6 @@
+[tools]
+rust = "1.93.0"
+
 [tasks.build]
 description = "Build release binary and install to ~/.cargo/bin"
 run = "cargo build --release && cargo install --path . --offline"
