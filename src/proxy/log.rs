@@ -23,6 +23,7 @@ impl ProxyLogEntry {
     }
 }
 
+#[derive(Clone)]
 pub struct ProxyLogger {
     path: String,
 }

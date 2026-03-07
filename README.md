@@ -150,7 +150,7 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 
 **Known limitations:**
 
-- **Domain fronting**: a CONNECT request to an allowed CDN domain could route to an attacker's backend via SNI/Host manipulation. kap sees the CONNECT domain, not the backend.
+- **Domain fronting (partial)**: kap validates that the TLS SNI in the tunnel matches the CONNECT domain, blocking SNI-mismatch attacks. Classic domain fronting (where SNI matches but the encrypted HTTP Host header differs) is not detected — this requires TLS interception, which kap intentionally avoids. Most major CDNs have disabled domain fronting.
 - **Container escape**: a kernel exploit that breaks out of the container bypasses all isolation. Not specific to kap. Running Docker inside a VM (e.g., Docker Desktop, Firecracker) adds defense-in-depth.
 - **No TLS inspection**: kap controls which domains are reachable, not what happens on them. It does not MITM HTTPS traffic. Once a domain is allowed, the agent has full access to that domain's API.
 

@@ -1,6 +1,7 @@
 pub mod allowlist;
 pub mod dns;
 pub mod log;
+pub mod sni;
 
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::Config;
@@ -124,13 +126,45 @@ async fn handle_connect(
 
     eprintln!("[proxy] CONNECT {host}");
 
-    // Establish tunnel
+    // Establish tunnel with SNI validation
+    let connect_domain = domain.to_string();
+    let logger = state.logger.clone();
+    let observe = state.observe;
     tokio::task::spawn(async move {
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
                 let mut upgraded = TokioIo::new(upgraded);
                 match TcpStream::connect(&host).await {
                     Ok(mut target) => {
+                        // Read the first chunk from the client (the TLS ClientHello)
+                        let mut peek_buf = vec![0u8; 4096];
+                        match tokio::io::AsyncReadExt::read(&mut upgraded, &mut peek_buf).await {
+                            Ok(0) => return,
+                            Ok(n) => {
+                                let data = &peek_buf[..n];
+                                if let Some(sni_host) = sni::extract_sni(data)
+                                    && !sni::sni_matches_connect_domain(&sni_host, &connect_domain)
+                                {
+                                    eprintln!(
+                                        "[proxy] SNI mismatch: CONNECT domain={connect_domain}, SNI={sni_host}"
+                                    );
+                                    if !observe {
+                                        let entry = ProxyLogEntry::new(
+                                            &connect_domain,
+                                            "denied",
+                                            &format!("SNI mismatch: {sni_host}"),
+                                        );
+                                        let _ = logger.log(&entry).await;
+                                        return; // drop the connection
+                                    }
+                                }
+                                // Forward the buffered bytes to upstream
+                                if target.write_all(data).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(_) => return,
+                        }
                         let _ = tokio::io::copy_bidirectional(&mut upgraded, &mut target).await;
                     }
                     Err(e) => {
@@ -414,6 +448,126 @@ mod tests {
         assert!(
             resp.contains("403"),
             "deny should override allow for CONNECT, got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sni_mismatch_drops_tunnel() {
+        // Start a mock upstream that the proxy will CONNECT to
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_port = upstream.local_addr().unwrap().port();
+        let upstream_addr = format!("127.0.0.1:{upstream_port}");
+
+        // Track whether the upstream received any data
+        let received = Arc::new(tokio::sync::Notify::new());
+        let received_clone = received.clone();
+        tokio::spawn(async move {
+            if let Ok((mut conn, _)) = upstream.accept().await {
+                let mut buf = [0u8; 1];
+                // If we receive any byte, notify
+                if tokio::io::AsyncReadExt::read(&mut conn, &mut buf)
+                    .await
+                    .unwrap_or(0)
+                    > 0
+                {
+                    received_clone.notify_one();
+                }
+            }
+        });
+
+        let port = start_proxy(&["127.0.0.1"], &[], false).await;
+
+        // Send CONNECT to the upstream address
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let connect_req =
+            format!("CONNECT {upstream_addr} HTTP/1.1\r\nHost: {upstream_addr}\r\n\r\n");
+        stream.write_all(connect_req.as_bytes()).await.unwrap();
+
+        // Read the 200 response
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("read timed out")
+            .unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+
+        // Now send a TLS ClientHello with SNI "evil.com" (mismatched)
+        let client_hello = sni::tests::build_client_hello("evil.com");
+        stream.write_all(&client_hello).await.unwrap();
+
+        // The proxy should drop the tunnel. Verify by trying to read — should get EOF.
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf)).await;
+        match result {
+            Ok(Ok(0)) | Err(_) => {} // EOF or timeout — proxy dropped the connection
+            Ok(Ok(n)) => {
+                // Might get a close, that's fine too
+                let _ = n;
+            }
+            Ok(Err(_)) => {} // connection reset — also fine
+        }
+
+        // Verify the upstream did NOT receive the ClientHello data
+        let was_forwarded =
+            tokio::time::timeout(std::time::Duration::from_millis(500), received.notified()).await;
+        assert!(
+            was_forwarded.is_err(),
+            "upstream should NOT have received data when SNI mismatches"
+        );
+    }
+
+    #[tokio::test]
+    async fn sni_match_allows_tunnel() {
+        // Start a mock upstream
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_port = upstream.local_addr().unwrap().port();
+        let upstream_addr = format!("127.0.0.1:{upstream_port}");
+
+        let received = Arc::new(tokio::sync::Notify::new());
+        let received_clone = received.clone();
+        tokio::spawn(async move {
+            if let Ok((mut conn, _)) = upstream.accept().await {
+                let mut buf = [0u8; 1];
+                if tokio::io::AsyncReadExt::read(&mut conn, &mut buf)
+                    .await
+                    .unwrap_or(0)
+                    > 0
+                {
+                    received_clone.notify_one();
+                }
+            }
+        });
+
+        let port = start_proxy(&["127.0.0.1"], &[], false).await;
+
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let connect_req =
+            format!("CONNECT {upstream_addr} HTTP/1.1\r\nHost: {upstream_addr}\r\n\r\n");
+        stream.write_all(connect_req.as_bytes()).await.unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("read timed out")
+            .unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+
+        // Send a ClientHello with SNI matching the CONNECT domain
+        let client_hello = sni::tests::build_client_hello("127.0.0.1");
+        stream.write_all(&client_hello).await.unwrap();
+
+        // The upstream SHOULD receive the data
+        let was_forwarded =
+            tokio::time::timeout(std::time::Duration::from_secs(2), received.notified()).await;
+        assert!(
+            was_forwarded.is_ok(),
+            "upstream should have received data when SNI matches"
         );
     }
 
