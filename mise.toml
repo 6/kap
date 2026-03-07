@@ -1,0 +1,3 @@
+[tasks.install]
+description = "Build release and install to ~/.cargo/bin"
+run = "cargo install --path ."
