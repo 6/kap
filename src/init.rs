@@ -67,7 +67,6 @@ services:
       - ./devg.toml:/etc/devg/config.toml:ro
       - ${{HOME}}/.devg/auth:/etc/devg/auth
       - proxy-logs:/var/log/devg
-    # Credentials from devg init-env (GH_TOKEN, API keys, etc.)
     env_file:
       - path: .env
         required: false
