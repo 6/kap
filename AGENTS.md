@@ -13,11 +13,12 @@ cargo run -- --help  # CLI help
 
 ## Architecture
 
-Single Rust binary with three enforcement layers:
+Single Rust binary with four enforcement layers:
 
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
-3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Provides tool-level filtering and credential isolation. Only starts when `[mcp]` is in config. OAuth servers registered via `devg mcp add` are auto-discovered from `~/.devg/auth/` without needing `[[mcp.servers]]` entries (add entries only for tool filtering).
+3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Tool-level allowlist filtering and credential isolation. Only starts when `[mcp]` is in config. Auth stored in `~/.devg/auth/` via `devg mcp add`; servers must be listed in devg.toml with `allow_tools`.
+4. **gh proxy** (:3130): proxies `gh` CLI commands from the app container. GH_TOKEN stays on the sidecar; the app container gets a shim script. Command allowlist in `[gh]` config. `gh auth token` and `gh api` are always blocked.
 
 ## Key modules
 
@@ -28,12 +29,15 @@ Single Rust binary with three enforcement layers:
 - `src/proxy/allowlist.rs`:wildcard domain matching, deny-overrides-allow (shared by HTTP proxy, DNS, and MCP proxy)
 - `src/proxy/log.rs`:structured JSONL logging + `why-denied` reader
 - `src/mcp/mod.rs`:MCP proxy HTTP listener, request routing, tool filtering
-- `src/mcp/filter.rs`:tool name allow/deny (reuses allowlist pattern)
+- `src/mcp/filter.rs`:tool name allowlist
+- `src/mcp/client.rs`:shared MCP client (initialize + tools/list handshake)
 - `src/mcp/jsonrpc.rs`:JSON-RPC 2.0 types, tools/list filtering, tools/call gating
 - `src/mcp/upstream.rs`:HTTPS client to upstream MCP servers, token injection + refresh
 - `src/mcp/auth.rs`:`devg auth` command: OAuth 2.1 (metadata discovery, dynamic client registration, PKCE, browser callback)
 - `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config
-- `src/init_env.rs`:runs as `initializeCommand`; regenerates compose overlay + writes `.env` with MCP credentials
+- `src/init_env.rs`:runs as `initializeCommand`; regenerates compose overlay, writes `.env`, generates gh shim
+- `src/gh/mod.rs`:gh CLI proxy HTTP listener, process spawning
+- `src/gh/filter.rs`:gh command allowlist (always blocks `auth token`, `api`)
 - `src/check.rs`:proxy health check (for Docker healthcheck)
 
 ## Testing policy
@@ -42,7 +46,7 @@ Every code change must include unit tests. Run `cargo test` before committing.
 
 After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint warnings and formatting drift. Fix all warnings before committing.
 
-Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all three layers (domain proxy, DNS forwarder, MCP proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
+Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all layers (domain proxy, DNS forwarder, MCP proxy, gh proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
 
 ## Compose overlay
 
