@@ -17,7 +17,7 @@ hyper-util = { version = "0.1", features = ["tokio", "http1"] }
 http-body-util = "0.1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
@@ -27,3 +27,6 @@ base64 = "0.22"
 rand = "0.8"
 url = "2"
 fs2 = "0.4"
+qrcode = { version = "0.14", default-features = false }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"

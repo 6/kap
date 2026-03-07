@@ -263,12 +263,17 @@ async fn find_available_port() -> Result<u16> {
 /// Start a temporary HTTP server and wait for the OAuth callback.
 /// Returns the authorization code.
 async fn wait_for_callback(port: u16) -> Result<String> {
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
+    wait_for_callback_with_listener(listener).await
+}
+
+async fn wait_for_callback_with_listener(listener: tokio::net::TcpListener) -> Result<String> {
     use hyper::server::conn::http1;
     use hyper_util::rt::TokioIo;
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
+    let port = listener.local_addr()?.port();
     let (tx, rx) = oneshot::channel::<String>();
     let tx = Arc::new(tokio::sync::Mutex::new(Some(tx)));
 
@@ -382,12 +387,11 @@ mod tests {
 
     #[tokio::test]
     async fn callback_server_extracts_code() {
-        let port = find_available_port().await.unwrap();
+        // Bind first, then pass to wait_for_callback to avoid TOCTOU port races
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
 
-        let server = tokio::spawn(async move { wait_for_callback(port).await });
-
-        // Give server a moment to bind
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let server = tokio::spawn(async move { wait_for_callback_with_listener(listener).await });
 
         // Simulate browser callback
         let client = reqwest::Client::new();

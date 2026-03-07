@@ -2,10 +2,20 @@
 ///
 /// Runs on the host. Reads local config, finds the running containers,
 /// and exec's checks into the app container.
-use anyhow::{Context, Result};
-use std::process::Command;
+use anyhow::Result;
 
-const PROXY_IP: &str = "172.28.0.3";
+use crate::remote::containers::{exec_exit_code, exec_in, find_containers};
+
+/// Read the sidecar IP from the app container's HTTP_PROXY env var.
+fn proxy_ip(app: &str) -> String {
+    exec_in(app, &["printenv", "HTTP_PROXY"])
+        .and_then(|v| {
+            v.strip_prefix("http://")
+                .and_then(|rest| rest.split(':').next())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| "172.28.0.3".to_string())
+}
 
 fn ok(msg: &str, pass: &mut u32) {
     println!("\x1b[32m ok\x1b[0m  {msg}");
@@ -24,6 +34,7 @@ pub fn run() -> Result<()> {
     print_config_summary(&config);
 
     let (app, sidecar) = find_containers()?;
+    let proxy_ip = proxy_ip(&app);
 
     let mut pass = 0;
     let mut fail = 0;
@@ -32,7 +43,7 @@ pub fn run() -> Result<()> {
     println!("  Network");
 
     match exec_in(&app, &["printenv", "HTTP_PROXY"]) {
-        Some(val) if val.contains(PROXY_IP) => ok("HTTP_PROXY set", &mut pass),
+        Some(val) if val.contains(&proxy_ip) => ok("HTTP_PROXY set", &mut pass),
         Some(_) => bad(
             "HTTP_PROXY points to wrong address (overlay may not be last in dockerComposeFile)",
             &mut fail,
@@ -41,13 +52,13 @@ pub fn run() -> Result<()> {
     }
 
     match exec_in(&app, &["cat", "/etc/resolv.conf"]) {
-        Some(resolv) if resolv.contains(PROXY_IP) => ok("DNS resolver configured", &mut pass),
+        Some(resolv) if resolv.contains(&proxy_ip) => ok("DNS resolver configured", &mut pass),
         _ => bad("DNS resolver not pointing to proxy", &mut fail),
     }
 
     if exec_exit_code(
         &app,
-        &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")],
+        &["bash", "-c", &format!("echo > /dev/tcp/{proxy_ip}/3128")],
     ) == 0
     {
         ok("proxy reachable", &mut pass);
@@ -154,7 +165,7 @@ pub fn run() -> Result<()> {
 
         if exec_exit_code(
             &app,
-            &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")],
+            &["bash", "-c", &format!("echo > /dev/tcp/{proxy_ip}/3129")],
         ) == 0
         {
             ok("MCP proxy reachable", &mut pass);
@@ -187,7 +198,7 @@ pub fn run() -> Result<()> {
     {
         if exec_exit_code(
             &app,
-            &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3130")],
+            &["bash", "-c", &format!("echo > /dev/tcp/{proxy_ip}/3130")],
         ) == 0
         {
             ok("CLI proxy reachable", &mut pass);
@@ -282,75 +293,4 @@ fn print_config_summary(config: &crate::config::Config) {
 fn load_local_config() -> crate::config::Config {
     let path = ".devcontainer/devg.toml";
     crate::config::Config::load(path).unwrap_or_default()
-}
-
-/// Find the app and sidecar containers.
-fn find_containers() -> Result<(String, String)> {
-    let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}"])
-        .output()
-        .context("running docker ps")?;
-
-    let names = String::from_utf8_lossy(&output.stdout);
-    let mut app = None;
-    let mut sidecar = None;
-
-    for name in names.lines() {
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        let inspect = Command::new("docker")
-            .args([
-                "inspect",
-                "--format",
-                "{{json .NetworkSettings.Networks}}",
-                name,
-            ])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .unwrap_or_default();
-        if !inspect.contains("devg_sandbox") {
-            continue;
-        }
-        if name.contains("devg-devg") || name.ends_with("-devg-1") {
-            sidecar = Some(name.to_string());
-        } else {
-            app = Some(name.to_string());
-        }
-    }
-
-    match (app, sidecar) {
-        (Some(a), Some(s)) => Ok((a, s)),
-        _ => anyhow::bail!(
-            "no running devcontainer found with devg networking.\n\n  \
-             Start it with: devcontainer up"
-        ),
-    }
-}
-
-fn exec_in(container: &str, cmd: &[&str]) -> Option<String> {
-    let output = Command::new("docker")
-        .arg("exec")
-        .arg(container)
-        .args(cmd)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn exec_exit_code(container: &str, cmd: &[&str]) -> i32 {
-    Command::new("docker")
-        .arg("exec")
-        .arg(container)
-        .args(cmd)
-        .output()
-        .ok()
-        .and_then(|o| o.status.code())
-        .unwrap_or(1)
 }

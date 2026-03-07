@@ -106,7 +106,11 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         .map(|c| c.tools.iter().map(|t| t.name.clone()).collect())
         .unwrap_or_default();
 
-    let overlay = crate::init::generate_overlay(&service_name, &compose_config, &cli_tools);
+    // Derive project root from devcontainer_dir (parent of .devcontainer/)
+    let project_dir = devcontainer_dir.parent().unwrap_or(devcontainer_dir);
+    let subnet_prefix = crate::init::derive_subnet(project_dir);
+    let overlay =
+        crate::init::generate_overlay(&service_name, &compose_config, &cli_tools, &subnet_prefix);
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;
     eprintln!("[init-env] regenerated {}", crate::init::OVERLAY_FILENAME);
