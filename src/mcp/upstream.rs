@@ -180,13 +180,13 @@ impl UpstreamClient {
             self.do_refresh(&mut auth).await?;
 
             // Write refreshed tokens to shared file (still holding lock)
-            if let Ok(json) = serde_json::to_string_pretty(&*auth) {
-                if let Err(e) = super::auth::write_private(path, &json) {
-                    eprintln!(
-                        "[mcp] warning: failed to persist refreshed tokens to {}: {e}",
-                        path.display()
-                    );
-                }
+            if let Ok(json) = serde_json::to_string_pretty(&*auth)
+                && let Err(e) = super::auth::write_private(path, &json)
+            {
+                eprintln!(
+                    "[mcp] warning: failed to persist refreshed tokens to {}: {e}",
+                    path.display()
+                );
             }
             // lock released on drop of lock_file
         } else {

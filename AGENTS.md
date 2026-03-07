@@ -39,6 +39,8 @@ Single Rust binary with three enforcement layers:
 
 Every code change must include unit tests. Run `cargo test` before committing.
 
+After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint warnings and formatting drift. Fix all warnings before committing.
+
 Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all three layers (domain proxy, DNS forwarder, MCP proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
 
 ## Security model

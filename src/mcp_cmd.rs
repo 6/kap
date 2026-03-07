@@ -77,8 +77,8 @@ pub fn list() -> Result<()> {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Header
-    println!("{:<16} {:<40} {}", "NAME", "UPSTREAM", "EXPIRES");
-    println!("{:<16} {:<40} {}", "----", "--------", "-------");
+    println!("{:<16} {:<40} EXPIRES", "NAME", "UPSTREAM");
+    println!("{:<16} {:<40} -------", "----", "--------");
 
     for (name, auth) in &entries {
         let expires = auth

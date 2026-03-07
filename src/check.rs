@@ -122,10 +122,10 @@ fn parse_mcp_response(text: &str) -> Result<serde_json::Value> {
     }
     // Try SSE: extract the last "data: " line
     for line in text.lines().rev() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            if let Ok(v) = serde_json::from_str(data) {
-                return Ok(v);
-            }
+        if let Some(data) = line.strip_prefix("data: ")
+            && let Ok(v) = serde_json::from_str(data)
+        {
+            return Ok(v);
         }
     }
     anyhow::bail!("cannot parse response as JSON or SSE")
