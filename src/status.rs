@@ -1,6 +1,7 @@
-/// Verify devcontainer-guard is configured correctly.
+/// Check if devcontainer-guard is working.
 ///
-/// Runs on the host. Finds the running app container and exec's checks into it.
+/// Runs on the host. Reads local config, finds the running containers,
+/// and exec's checks into the app container.
 use anyhow::{Context, Result};
 use std::process::Command;
 
@@ -10,63 +11,63 @@ pub fn run() -> Result<()> {
     println!("devg status");
     println!();
 
-    let container = find_app_container()?;
-    println!("  container: {container}");
+    // Config summary (read from host)
+    let config = load_local_config();
+    print_config_summary(&config);
+
+    // Find containers
+    let (app, sidecar) = find_containers()?;
+    println!("  containers:");
+    println!("    app:   {app}");
+    println!("    proxy: {sidecar}");
     println!();
 
     let mut pass = 0;
     let mut fail = 0;
 
-    // 1. HTTP_PROXY set correctly
-    print!("  HTTP_PROXY ... ");
-    match exec_in(&container, &["printenv", "HTTP_PROXY"]) {
+    // Network checks (exec into app container)
+    println!("  network:");
+
+    print!("    HTTP_PROXY ... ");
+    match exec_in(&app, &["printenv", "HTTP_PROXY"]) {
         Some(val) if val.contains(PROXY_IP) => {
-            println!("ok ({val})");
+            println!("ok");
             pass += 1;
         }
         Some(val) => {
             println!("WRONG ({val})");
-            println!("         expected {PROXY_IP}, overlay may not be last in dockerComposeFile");
+            println!("           overlay may not be last in dockerComposeFile");
             fail += 1;
         }
         None => {
             println!("NOT SET");
-            println!("         overlay may not be applied");
             fail += 1;
         }
     }
 
-    // 2. DNS points at proxy
-    print!("  DNS resolver ... ");
-    match exec_in(&container, &["cat", "/etc/resolv.conf"]) {
+    print!("    DNS resolver ... ");
+    match exec_in(&app, &["cat", "/etc/resolv.conf"]) {
         Some(resolv) if resolv.contains(PROXY_IP) => {
             println!("ok");
             pass += 1;
         }
         _ => {
-            println!("WRONG (expected nameserver {PROXY_IP})");
+            println!("WRONG (expected {PROXY_IP})");
             fail += 1;
         }
     }
 
-    // 3. Proxy reachable (TCP connect to port 3128)
-    print!("  proxy reachable ... ");
-    // Use bash to do a /dev/tcp connect since curl to a bare proxy is unreliable
-    let code = exec_exit_code(
-        &container,
-        &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")],
-    );
-    if code == 0 {
+    print!("    proxy reachable ... ");
+    if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3128")]) == 0 {
         println!("ok");
         pass += 1;
     } else {
-        println!("FAIL (can't reach {PROXY_IP}:3128)");
+        println!("FAIL");
         fail += 1;
     }
 
-    // 4. DNS resolves allowed domain
-    print!("  DNS allows github.com ... ");
-    match exec_in(&container, &["dig", "+short", "+time=3", "github.com"]) {
+    print!("    DNS allows github.com ... ");
+    match exec_in(&app, &["dig", "+short", "+time=3", "github.com"]) {
         Some(out) if !out.is_empty() => {
             println!("ok");
             pass += 1;
@@ -77,15 +78,14 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 5. DNS blocks disallowed domain
-    print!("  DNS blocks evil.test ... ");
-    match exec_in(&container, &["dig", "+short", "+time=3", "evil.test"]) {
+    print!("    DNS blocks evil.test ... ");
+    match exec_in(&app, &["dig", "+short", "+time=3", "evil.test"]) {
         Some(out) if out.is_empty() => {
-            println!("ok (NXDOMAIN)");
+            println!("ok");
             pass += 1;
         }
         None => {
-            println!("ok (NXDOMAIN)");
+            println!("ok");
             pass += 1;
         }
         _ => {
@@ -94,20 +94,68 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // 6. HTTPS to blocked domain is denied
-    print!("  HTTPS blocked ... ");
+    print!("    HTTPS blocked ... ");
     let http_code = exec_in(
-        &container,
+        &app,
         &["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "https://example.com"],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
     if code == "403" || code == "000" || code.is_empty() {
-        println!("ok (example.com blocked)");
+        println!("ok");
         pass += 1;
     } else {
-        println!("FAIL (got HTTP {code}, expected 403)");
-        println!("         overlay may not be last in dockerComposeFile");
+        println!("FAIL (HTTP {code})");
         fail += 1;
+    }
+
+    // MCP checks
+    if let Some(ref mcp) = config.mcp
+        && !mcp.servers.is_empty()
+    {
+            println!();
+            println!("  mcp:");
+
+            print!("    endpoint reachable ... ");
+            if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
+                println!("ok");
+                pass += 1;
+            } else {
+                println!("FAIL");
+                fail += 1;
+            }
+
+            for server in &mcp.servers {
+                print!("    {} ... ", server.name);
+                let resp = exec_in(
+                    &app,
+                    &[
+                        "curl", "-s", "--noproxy", "*", "--max-time", "5",
+                        "-X", "POST",
+                        &format!("http://{PROXY_IP}:3129/{}", server.name),
+                        "-H", "Content-Type: application/json",
+                        "-d", r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                    ],
+                );
+                match resp {
+                    Some(body) if body.contains("\"tools\"") => {
+                        let tool_count = body.matches("\"name\"").count();
+                        println!("ok ({tool_count} tools)");
+                        pass += 1;
+                    }
+                    Some(body) if body.contains("unknown MCP server") => {
+                        println!("NOT LOADED (check auth/credentials)");
+                        fail += 1;
+                    }
+                    Some(body) if body.contains("\"error\"") => {
+                        println!("ERROR (upstream returned error)");
+                        fail += 1;
+                    }
+                    _ => {
+                        println!("FAIL (no response)");
+                        fail += 1;
+                    }
+                }
+            }
     }
 
     println!();
@@ -120,38 +168,72 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// Find the running app container by looking for devg's compose project.
-fn find_app_container() -> Result<String> {
-    // Look for containers with the devg overlay network
+fn print_config_summary(config: &crate::config::Config) {
+    let allow_count = config.proxy.network.allow.len();
+    let deny_count = config.proxy.network.deny.len();
+    println!("  config:");
+    if allow_count == 0 {
+        println!("    domains: NONE (no domains allowed, all traffic will be blocked)");
+    } else {
+        println!("    domains: {allow_count} allowed, {deny_count} denied");
+    }
+    if let Some(ref mcp) = config.mcp {
+        let names: Vec<&str> = mcp.servers.iter().map(|s| s.name.as_str()).collect();
+        if names.is_empty() {
+            println!("    mcp: no servers configured");
+        } else {
+            println!("    mcp: {}", names.join(", "));
+        }
+    } else {
+        println!("    mcp: none");
+    }
+    println!();
+}
+
+fn load_local_config() -> crate::config::Config {
+    let path = ".devcontainer/devg.toml";
+    crate::config::Config::load(path).unwrap_or_default()
+}
+
+/// Find the app and sidecar containers.
+fn find_containers() -> Result<(String, String)> {
     let output = Command::new("docker")
         .args(["ps", "--format", "{{.Names}}"])
         .output()
         .context("running docker ps")?;
 
     let names = String::from_utf8_lossy(&output.stdout);
+    let mut app = None;
+    let mut sidecar = None;
 
-    // Find a container on the devg_sandbox network that isn't the devg sidecar
     for name in names.lines() {
         let name = name.trim();
-        if name.is_empty() || name.contains("devg-devg") || name.ends_with("-devg-1") {
+        if name.is_empty() {
             continue;
         }
-        // Check if it's on the devg_sandbox network
         let inspect = Command::new("docker")
             .args(["inspect", "--format", "{{json .NetworkSettings.Networks}}", name])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default();
-        if inspect.contains("devg_sandbox") {
-            return Ok(name.to_string());
+        if !inspect.contains("devg_sandbox") {
+            continue;
+        }
+        if name.contains("devg-devg") || name.ends_with("-devg-1") {
+            sidecar = Some(name.to_string());
+        } else {
+            app = Some(name.to_string());
         }
     }
 
-    anyhow::bail!(
-        "no running devcontainer found with devg networking.\n\n  \
-         Start it with: devcontainer up --workspace-folder ."
-    )
+    match (app, sidecar) {
+        (Some(a), Some(s)) => Ok((a, s)),
+        _ => anyhow::bail!(
+            "no running devcontainer found with devg networking.\n\n  \
+             Start it with: devcontainer up --workspace-folder ."
+        ),
+    }
 }
 
 fn exec_in(container: &str, cmd: &[&str]) -> Option<String> {
