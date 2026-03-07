@@ -523,6 +523,15 @@ const DETECTABLE_TOOLS: &[DetectedTool] = &[DetectedTool {
     env_defaults: &[("GH_TOKEN", "$(gh auth token)")],
 }];
 
+/// Look up the default shell expression for an env var (e.g. "GH_TOKEN" -> "$(gh auth token)").
+pub fn env_var_default(var: &str) -> Option<&'static str> {
+    DETECTABLE_TOOLS
+        .iter()
+        .flat_map(|t| t.env_defaults.iter())
+        .find(|(name, _)| *name == var)
+        .map(|(_, expr)| *expr)
+}
+
 fn detect_cli_tools() -> Vec<&'static DetectedTool> {
     DETECTABLE_TOOLS
         .iter()

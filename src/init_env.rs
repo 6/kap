@@ -68,6 +68,16 @@ pub fn run(project_dir: &str) -> Result<()> {
         {
             eprintln!("[sidecar-init] {var} (from host env)");
             lines.push(format!("{var}={val}"));
+            continue;
+        }
+        // Last resort: try well-known shell expression (e.g. GH_TOKEN -> `gh auth token`)
+        if let Some(expr) = crate::init::env_var_default(var) {
+            let resolved = eval_shell_substitution(expr);
+            if !resolved.is_empty() {
+                eprintln!("[sidecar-init] {var} (from {expr})");
+                lines.push(format!("# {var}={expr}"));
+                lines.push(format!("{var}={resolved}"));
+            }
         }
     }
 
