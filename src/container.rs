@@ -30,6 +30,16 @@ pub fn up(reset: bool) -> Result<()> {
         std::process::exit(status.code().unwrap_or(1));
     }
 
+    // Clear proxy logs on reset (the volume persists across container recreates)
+    if reset
+        && let Some(sidecar) = find_sidecar() {
+            let _ = Command::new("docker")
+                .args(["exec", &sidecar, "sh", "-c", "rm -f /var/log/kap/*.jsonl"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
     // Show health checks after successful start
     println!();
     if let Err(e) = crate::status::run() {
@@ -246,6 +256,19 @@ fn resolve_workspace(project_name: &str) -> Result<PathBuf> {
         .ok_or_else(|| {
             anyhow::anyhow!("could not find workspace folder for project '{project_name}'")
         })
+}
+
+/// Find the kap sidecar container name from running containers.
+fn find_sidecar() -> Option<String> {
+    let output = Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+        .ok()?;
+    let names = String::from_utf8_lossy(&output.stdout);
+    names
+        .lines()
+        .find(|n| n.contains("kap-kap") || n.ends_with("-kap-1"))
+        .map(String::from)
 }
 
 /// Check that `kap init` has been run in the current directory.

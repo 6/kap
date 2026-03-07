@@ -52,6 +52,8 @@ impl ProxyLogger {
     }
 }
 
+const MAX_DENIED_ENTRIES: usize = 100;
+
 /// Read and display denied requests from the proxy log.
 pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
     let path = Path::new(log_path);
@@ -61,30 +63,40 @@ pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Collect all denied entries, then show last MAX_DENIED_ENTRIES
     let file = fs::File::open(path).await?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
-    let mut count = 0;
+    let mut entries: Vec<String> = Vec::new();
 
     while let Some(line) = lines.next_line().await? {
         if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
             let action = entry.get("action").and_then(|v| v.as_str()).unwrap_or("");
             if action == "denied" {
                 let domain = entry.get("domain").and_then(|v| v.as_str()).unwrap_or("?");
-                // Skip kap's own health-check probes
                 if domain == "kap-test.invalid" {
                     continue;
                 }
                 let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
                 let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("?");
-                println!("{ts}  {method:8} {domain}  DENIED");
-                count += 1;
+                entries.push(format!("{ts}  {method:8} {domain}  DENIED"));
             }
         }
     }
 
-    if count == 0 && !tail {
+    if entries.is_empty() && !tail {
         println!("No denied requests found in {log_path}");
+    } else {
+        let total = entries.len();
+        if total > MAX_DENIED_ENTRIES {
+            println!("({} older entries omitted)\n", total - MAX_DENIED_ENTRIES);
+        }
+        for entry in entries
+            .iter()
+            .skip(total.saturating_sub(MAX_DENIED_ENTRIES))
+        {
+            println!("{entry}");
+        }
     }
 
     if tail {
