@@ -170,9 +170,9 @@ pub fn run() -> Result<()> {
                         continue;
                     }
                     if let Some(count) = v["tools"].as_u64() {
-                        ok(&format!("{name} ({count} tools)"), &mut pass);
+                        ok(&format!("\x1b[1m{name}\x1b[0m ({count} tools)"), &mut pass);
                     } else if let Some(err) = v["error"].as_str() {
-                        bad(&format!("{name}: {err}"), &mut fail);
+                        bad(&format!("\x1b[1m{name}\x1b[0m: {err}"), &mut fail);
                     }
                 }
             } else {
@@ -206,16 +206,19 @@ pub fn run() -> Result<()> {
             }
 
             if shim_ok && missing_vars.is_empty() {
-                ok(&format!("{} ready", tool.name), &mut pass);
+                ok(&format!("\x1b[1m{}\x1b[0m ready", tool.name), &mut pass);
             } else if !shim_ok {
                 bad(
-                    &format!("{} shim not found in app container", tool.name),
+                    &format!(
+                        "\x1b[1m{}\x1b[0m shim not found in app container",
+                        tool.name
+                    ),
                     &mut fail,
                 );
             } else {
                 bad(
                     &format!(
-                        "{}: {} not set on sidecar",
+                        "\x1b[1m{}\x1b[0m: {} not set on sidecar",
                         tool.name,
                         missing_vars
                             .iter()
@@ -278,10 +281,10 @@ fn print_config_summary(config: &crate::config::Config) {
             println!("    mcp:");
             for s in &mcp.servers {
                 if s.token_env.is_some() || registered.contains(&s.name) {
-                    println!("      \x1b[32m✓\x1b[0m {}", s.name);
+                    println!("      \x1b[32m✓\x1b[0m \x1b[1m{}\x1b[0m", s.name);
                 } else {
                     println!(
-                        "      \x1b[31m✗\x1b[0m {} — run `kap mcp add {0} <url>`",
+                        "      \x1b[31m✗\x1b[0m \x1b[1m{}\x1b[0m - run `kap mcp add {0} <url>`",
                         s.name
                     );
                 }
@@ -289,7 +292,11 @@ fn print_config_summary(config: &crate::config::Config) {
         }
     }
     if let Some(ref cli) = config.cli {
-        let names: Vec<&str> = cli.tools.iter().map(|t| t.name.as_str()).collect();
+        let names: Vec<String> = cli
+            .tools
+            .iter()
+            .map(|t| format!("\x1b[1m{}\x1b[0m", t.name))
+            .collect();
         if !names.is_empty() {
             println!("    cli: {}", names.join(", "));
         }
