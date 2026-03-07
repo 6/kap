@@ -104,10 +104,6 @@ async fn handle_request(
         None => return Ok(error_response(400, "missing \"args\" array")),
     };
 
-    if args.is_empty() {
-        return Ok(error_response(400, "empty args"));
-    }
-
     // Map the app container's workspace path to /workspace on the sidecar
     let cwd = parsed["cwd"]
         .as_str()
@@ -311,16 +307,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_args_returns_400() {
+    async fn empty_args_shows_help() {
         let port = start_cli_proxy("gh", &["*"], &[]).await;
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("http://127.0.0.1:{port}/gh"))
-            .json(&serde_json::json!({"args": []}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 400);
+        let (status, _, _) = post(port, "gh", &[]).await;
+        // gh with no args shows help (exit 0 or 1 depending on tool, but not 400)
+        assert!(status == 200 || status == 500); // 500 if gh not installed
     }
 
     #[tokio::test]

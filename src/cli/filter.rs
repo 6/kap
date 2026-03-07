@@ -22,8 +22,9 @@ impl CommandFilter {
     }
 
     pub fn is_allowed(&self, args: &[String]) -> bool {
+        // Empty args = show help, always allowed
         if args.is_empty() {
-            return false;
+            return true;
         }
         let joined = args.join(" ");
         // Deny: exact match on joined string OR prefix match on first arg
@@ -124,9 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_args_denied() {
+    fn empty_args_shows_help() {
         let f = CommandFilter::new(&s(&["*"]), &[]);
-        assert!(!f.is_allowed(&[]));
+        assert!(f.is_allowed(&[]));
     }
 
     #[test]
