@@ -123,7 +123,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
     }
 
-    // Auto-discover OAuth servers from auth files not already in config
+    // Auto-discover servers from auth files not already in config
     let config_names: std::collections::HashSet<&str> =
         config.servers.iter().map(|s| s.name.as_str()).collect();
     for name in list_auth_files(&config.auth_dir) {
@@ -134,7 +134,18 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
         match StoredAuth::load(&auth_path) {
             Ok(auth) => {
                 let upstream = auth.upstream.clone();
-                let client = UpstreamClient::new(upstream, auth, vec![], Some(auth_path));
+                // Use headers from auth file if present (static API key auth)
+                let headers: Vec<(String, String)> = auth
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let has_token = !auth.access_token.is_empty();
+                let client = if has_token {
+                    UpstreamClient::new(upstream, auth, headers, Some(auth_path))
+                } else {
+                    UpstreamClient::with_headers_only(upstream, headers)
+                };
                 let filter = ToolFilter::new(&[], &[]);
                 eprintln!("[mcp] {name} → {} (auto-discovered)", client.upstream_url);
                 servers.insert(name, McpServer { client, filter });
@@ -444,6 +455,7 @@ mod tests {
             refresh_token: None,
             token_endpoint: "http://unused/token".to_string(),
             expires_at: None,
+            headers: Default::default(),
         };
 
         let client = UpstreamClient::new(

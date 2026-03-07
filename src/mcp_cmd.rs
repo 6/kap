@@ -13,34 +13,73 @@ fn auth_dir() -> PathBuf {
     PathBuf::from(auth::host_auth_dir())
 }
 
-/// `devg mcp add <name> <upstream>` — run OAuth and register globally.
-pub async fn add(name: &str, upstream: &str, reauth: bool) -> Result<()> {
+/// `devg mcp add <name> <upstream>` — run OAuth or store static headers.
+pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
 
     if file_path.exists() && !reauth {
         let auth = StoredAuth::load(&file_path)?;
-        eprintln!("Already authenticated with {name} ({})", auth.upstream);
-        eprintln!("Use --reauth to re-authenticate.");
+        eprintln!("Already registered: {name} ({})", auth.upstream);
+        eprintln!("Use --reauth to re-register.");
         return Ok(());
     }
 
-    let mut stored = auth::run(name, upstream).await?;
+    if !headers.is_empty() {
+        // Static headers mode: skip OAuth
+        let mut header_map = std::collections::HashMap::new();
+        for h in headers {
+            let (key, value) = h.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("invalid header format: {h:?} (expected KEY=VALUE)")
+            })?;
+            header_map.insert(key.to_string(), value.to_string());
+        }
 
-    // Verify tools/list works. If not, try common MCP subpaths.
-    let mcp_url = discover_mcp_endpoint(upstream, &stored.access_token).await;
-    if let Some(ref url) = mcp_url {
-        stored.upstream = url.clone();
+        let mut stored = StoredAuth {
+            upstream: upstream.to_string(),
+            client_id: String::new(),
+            client_secret: None,
+            access_token: String::new(),
+            refresh_token: None,
+            token_endpoint: String::new(),
+            expires_at: None,
+            headers: header_map,
+        };
+
+        // Verify tools/list works, try common subpaths
+        let header_pairs: Vec<(String, String)> = stored
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mcp_url = discover_mcp_endpoint_with_headers(upstream, &header_pairs).await;
+        if let Some(ref url) = mcp_url {
+            stored.upstream = url.clone();
+        }
+
+        auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
+        eprintln!("[auth] saved to {}", file_path.display());
+    } else {
+        // OAuth mode
+        let mut stored = auth::run(name, upstream).await?;
+
+        // Verify tools/list works. If not, try common MCP subpaths.
+        let mcp_url = discover_mcp_endpoint(upstream, &stored.access_token).await;
+        if let Some(ref url) = mcp_url {
+            stored.upstream = url.clone();
+        }
+
+        auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
+        eprintln!("[auth] tokens saved to {}", file_path.display());
     }
 
-    auth::write_auth_file(name, &stored, &dir.to_string_lossy())?;
-    eprintln!("[auth] tokens saved to {}", file_path.display());
-
     eprintln!();
-    eprintln!("To use in a project, add to .devcontainer/devg.toml:");
+    eprintln!("Registered {name}. It will be auto-discovered by devg.");
+    eprintln!("To restrict tools, add to .devcontainer/devg.toml:");
     eprintln!();
     eprintln!("  [[mcp.servers]]");
     eprintln!("  name = \"{name}\"");
+    eprintln!("  deny_tools = [\"delete_*\"]");
     eprintln!();
 
     Ok(())
@@ -108,18 +147,36 @@ pub async fn get(name: &str) -> Result<()> {
     println!("Name:     {name}");
     println!("Upstream: {}", auth.upstream);
 
-    let expires = auth
-        .expires_at
-        .as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "never".to_string());
-    println!("Expires:  {expires}");
+    let has_headers = !auth.headers.is_empty();
+    let has_token = !auth.access_token.is_empty();
+    if has_headers {
+        let keys: Vec<&str> = auth.headers.keys().map(|k| k.as_str()).collect();
+        println!("Auth:     headers ({})", keys.join(", "));
+    } else if has_token {
+        let expires = auth
+            .expires_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "never".to_string());
+        println!("Auth:     OAuth (expires {expires})");
+    }
 
     // Fetch tools list from upstream
+    let header_pairs: Vec<(String, String)> = auth
+        .headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let token = if has_token {
+        Some(auth.access_token.as_str())
+    } else {
+        None
+    };
+
     println!();
     eprint!("Fetching tools...");
-    match fetch_tools_list(&auth.upstream, &auth.access_token).await {
+    match fetch_tools_list(&auth.upstream, token, &header_pairs).await {
         Ok(tools) => {
             eprintln!(" {} tools", tools.len());
             println!();
@@ -143,7 +200,11 @@ pub async fn get(name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_tools_list(url: &str, token: &str) -> Result<Vec<serde_json::Value>> {
+async fn fetch_tools_list(
+    url: &str,
+    token: Option<&str>,
+    headers: &[(String, String)],
+) -> Result<Vec<serde_json::Value>> {
     let http = reqwest::Client::new();
 
     // 1. Initialize to establish session
@@ -157,16 +218,19 @@ async fn fetch_tools_list(url: &str, token: &str) -> Result<Vec<serde_json::Valu
             "clientInfo": {"name": "devg", "version": "1.0"}
         }
     });
-    let resp = http
+    let mut req = http
         .post(url)
-        .bearer_auth(token)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")
         .json(&init_body)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .context("initialize")?;
+        .timeout(std::time::Duration::from_secs(10));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    for (k, v) in headers {
+        req = req.header(k.as_str(), v.as_str());
+    }
+    let resp = req.send().await.context("initialize")?;
 
     let session_id = resp
         .headers()
@@ -187,12 +251,16 @@ async fn fetch_tools_list(url: &str, token: &str) -> Result<Vec<serde_json::Valu
     });
     let mut req = http
         .post(url)
-        .bearer_auth(token)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")
         .json(&list_body)
         .timeout(std::time::Duration::from_secs(10));
-
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    for (k, v) in headers {
+        req = req.header(k.as_str(), v.as_str());
+    }
     if let Some(ref sid) = session_id {
         req = req.header("Mcp-Session-Id", sid);
     }
@@ -231,6 +299,64 @@ pub fn remove(name: &str) -> Result<()> {
 
     eprintln!("Removed {name}");
     Ok(())
+}
+
+/// Try tools/list with static headers at the given URL and common subpaths.
+async fn discover_mcp_endpoint_with_headers(
+    base_url: &str,
+    headers: &[(String, String)],
+) -> Option<String> {
+    let base = base_url.trim_end_matches('/');
+    let candidates = [base.to_string(), format!("{base}/mcp")];
+
+    for url in &candidates {
+        eprintln!("[auth] trying tools/list at {url}...");
+        match try_tools_list_with_headers(url, headers).await {
+            Ok(count) => {
+                eprintln!("[auth] success: {count} tools available at {url}");
+                return Some(url.clone());
+            }
+            Err(e) => {
+                eprintln!("[auth] {url}: {e}");
+            }
+        }
+    }
+
+    eprintln!("[auth] warning: tools/list failed at all endpoints");
+    None
+}
+
+async fn try_tools_list_with_headers(url: &str, headers: &[(String, String)]) -> Result<usize> {
+    let http = reqwest::Client::new();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+    let mut req = http
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .json(&body);
+
+    for (key, value) in headers {
+        req = req.header(key.as_str(), value.as_str());
+    }
+
+    let resp = req.send().await.context("connecting to MCP server")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+
+    let json: serde_json::Value = resp.json().await.context("parsing response")?;
+    if let Some(err) = json.get("error") {
+        anyhow::bail!("JSON-RPC error: {err}");
+    }
+    let count = json["result"]["tools"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    Ok(count)
 }
 
 /// Try tools/list at the given URL and common subpaths (/mcp).
@@ -302,6 +428,7 @@ mod tests {
             refresh_token: None,
             token_endpoint: format!("{upstream}/token"),
             expires_at: Some("2030-01-01T00:00:00Z".to_string()),
+            headers: std::collections::HashMap::new(),
         }
     }
 

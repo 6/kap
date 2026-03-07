@@ -95,7 +95,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum McpCommand {
-    /// Register an MCP server (OAuth 2.1 authentication)
+    /// Register an MCP server (OAuth 2.1 or static headers)
     Add {
         /// Name for this MCP server (e.g. "linear", "github")
         name: String,
@@ -106,6 +106,10 @@ enum McpCommand {
         /// Force re-authentication even if already registered
         #[arg(long)]
         reauth: bool,
+
+        /// Static header as KEY=VALUE (skips OAuth). Can be repeated.
+        #[arg(long = "header", value_name = "KEY=VALUE")]
+        headers: Vec<String>,
     },
     /// List registered MCP servers
     List,
@@ -196,7 +200,8 @@ async fn main() -> anyhow::Result<()> {
                 name,
                 upstream,
                 reauth,
-            } => mcp_cmd::add(&name, &upstream, reauth).await,
+                headers,
+            } => mcp_cmd::add(&name, &upstream, reauth, &headers).await,
             McpCommand::List => mcp_cmd::list(),
             McpCommand::Get { name } => mcp_cmd::get(&name).await,
             McpCommand::Remove { name } => mcp_cmd::remove(&name),

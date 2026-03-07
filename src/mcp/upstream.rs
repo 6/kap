@@ -4,16 +4,22 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 
-/// Stored OAuth tokens for an MCP server.
+/// Stored auth for an MCP server (OAuth tokens or static headers).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StoredAuth {
     pub upstream: String,
+    #[serde(default)]
     pub client_id: String,
     pub client_secret: Option<String>,
+    #[serde(default)]
     pub access_token: String,
     pub refresh_token: Option<String>,
+    #[serde(default)]
     pub token_endpoint: String,
     pub expires_at: Option<String>,
+    /// Static headers for non-OAuth auth (e.g., API keys).
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub headers: std::collections::HashMap<String, String>,
 }
 
 impl StoredAuth {
@@ -76,6 +82,7 @@ impl UpstreamClient {
             refresh_token: None,
             token_endpoint: String::new(),
             expires_at: None,
+            headers: Default::default(),
         };
         Self::new(upstream_url, auth, extra_headers, None)
     }
@@ -90,6 +97,7 @@ impl UpstreamClient {
             refresh_token: None,
             token_endpoint: String::new(),
             expires_at: None,
+            headers: Default::default(),
         };
         Self::new(upstream_url, auth, extra_headers, None)
     }
@@ -263,6 +271,7 @@ mod tests {
             refresh_token: Some("refresh_xyz".to_string()),
             token_endpoint: "https://mcp.example.com/token".to_string(),
             expires_at: expires_at.map(String::from),
+            headers: Default::default(),
         }
     }
 
@@ -409,6 +418,7 @@ mod tests {
             refresh_token: Some("old_refresh".to_string()),
             token_endpoint: format!("http://127.0.0.1:{port}/token"),
             expires_at: Some("2020-01-01T00:00:00Z".to_string()), // expired
+            headers: Default::default(),
         };
 
         let client = UpstreamClient::new(
@@ -453,6 +463,7 @@ mod tests {
             refresh_token: Some("fresh_refresh".to_string()),
             token_endpoint: "http://127.0.0.1:1/token".to_string(), // unreachable — should not be called
             expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+            headers: Default::default(),
         };
         std::fs::write(&auth_path, serde_json::to_string_pretty(&fresh).unwrap()).unwrap();
 
@@ -465,6 +476,7 @@ mod tests {
             refresh_token: Some("old_refresh".to_string()),
             token_endpoint: "http://127.0.0.1:1/token".to_string(),
             expires_at: Some("2020-01-01T00:00:00Z".to_string()),
+            headers: Default::default(),
         };
 
         let client = UpstreamClient::new(

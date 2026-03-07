@@ -111,6 +111,7 @@ pub async fn run(_name: &str, upstream: &str) -> Result<StoredAuth> {
         refresh_token: token_resp.refresh_token,
         token_endpoint: metadata.token_endpoint,
         expires_at,
+        headers: Default::default(),
     };
 
     eprintln!("[auth] done");
