@@ -133,44 +133,22 @@ pub fn run() -> Result<()> {
             bad("MCP proxy not reachable on :3129", &mut fail);
         }
 
-        for server in &mcp.servers {
-            // Some MCP servers (e.g. Linear) require initialize before tools/list.
-            // Send initialize first to establish a session, then tools/list.
-            let _ = exec_in(
-                &app,
-                &[
-                    "curl", "-s", "--noproxy", "*", "--max-time", "5",
-                    "-X", "POST",
-                    &format!("http://{PROXY_IP}:3129/{}", server.name),
-                    "-H", "Content-Type: application/json",
-                    "-d", r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"devg-status","version":"1.0"}}}"#,
-                ],
-            );
-            let resp = exec_in(
-                &app,
-                &[
-                    "curl", "-s", "--noproxy", "*", "--max-time", "5",
-                    "-X", "POST",
-                    &format!("http://{PROXY_IP}:3129/{}", server.name),
-                    "-H", "Content-Type: application/json",
-                    "-d", r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-                ],
-            );
-            match resp {
-                Some(body) if body.contains("\"tools\"") => {
-                    let tool_count = body.matches("\"name\"").count();
-                    ok(&format!("{} ({tool_count} tools)", server.name), &mut pass);
-                }
-                Some(body) if body.contains("unknown MCP server") => {
-                    bad(&format!("{} not loaded (check auth/credentials)", server.name), &mut fail);
-                }
-                Some(body) if body.contains("\"error\"") => {
-                    bad(&format!("{} upstream error", server.name), &mut fail);
-                }
-                _ => {
-                    bad(&format!("{} no response", server.name), &mut fail);
+        // Run `devg check --mcp` inside the sidecar (uses reqwest, handles
+        // initialize + tools/list with session IDs properly).
+        if let Some(output) = exec_in(&sidecar, &["devg", "check", "--mcp"]) {
+            for line in output.lines() {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                let name = v["name"].as_str().unwrap_or("?");
+                if let Some(count) = v["tools"].as_u64() {
+                    ok(&format!("{name} ({count} tools)"), &mut pass);
+                } else if let Some(err) = v["error"].as_str() {
+                    bad(&format!("{name}: {err}"), &mut fail);
                 }
             }
+        } else {
+            bad("devg check --mcp failed in sidecar", &mut fail);
         }
     }
 

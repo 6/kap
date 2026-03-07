@@ -41,6 +41,14 @@ enum Command {
         /// Only check proxy health (for container healthcheck)
         #[arg(long)]
         proxy: bool,
+
+        /// Check MCP servers (initialize + tools/list). Output: JSON lines.
+        #[arg(long)]
+        mcp: bool,
+
+        /// Path to config file (for --mcp)
+        #[arg(short, long, default_value = "/etc/devg/config.toml")]
+        config: String,
     },
     /// Show denied requests from the proxy log
     WhyDenied {
@@ -139,7 +147,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Init { project_dir } => init::run(&project_dir),
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
-        Command::Check { proxy } => check::run(proxy).await,
+        Command::Check { proxy, mcp, config } => {
+            if mcp {
+                check::run_mcp(&config).await
+            } else {
+                check::run(proxy).await
+            }
+        }
         Command::WhyDenied { tail, log } => {
             if std::path::Path::new(&log).exists() {
                 // Running inside the container
