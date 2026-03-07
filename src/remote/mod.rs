@@ -8,7 +8,7 @@ pub mod ws;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -17,7 +17,6 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
 
 type Body = Full<Bytes>;
 
@@ -25,17 +24,9 @@ pub struct RemoteState {
     pub data_dir: PathBuf,
 }
 
-/// Start the remote access HTTPS daemon.
+/// Start the remote access HTTP daemon.
 pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
-    // Install the default crypto provider for rustls
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let (cert_pem, key_pem, _fingerprint) = auth::load_or_generate_tls(&data_dir)?;
     let _pairing_token = auth::load_or_generate_pairing_token(&data_dir)?;
-
-    // Build TLS config
-    let tls_config = build_tls_config(&cert_pem, &key_pem)?;
-    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
     let state = Arc::new(RemoteState {
         data_dir: data_dir.clone(),
@@ -45,30 +36,15 @@ pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
     let local_addr = listener.local_addr()?;
     let port = local_addr.port();
 
-    eprintln!("[remote] listening on https://{local_addr}");
+    eprintln!("[remote] listening on http://{local_addr}");
     print_pair(&data_dir, port)?;
 
     loop {
         let (stream, addr) = listener.accept().await?;
-        let acceptor = acceptor.clone();
         let state = state.clone();
 
         tokio::spawn(async move {
-            let tls_stream = match acceptor.accept(stream).await {
-                Ok(s) => s,
-                Err(e) => {
-                    // Don't spam logs for non-TLS connections (e.g., health checks)
-                    if !e
-                        .to_string()
-                        .contains("received message with invalid content type")
-                    {
-                        eprintln!("[remote] TLS handshake failed from {addr}: {e}");
-                    }
-                    return;
-                }
-            };
-
-            let io = TokioIo::new(tls_stream);
+            let io = TokioIo::new(stream);
             let state = state.clone();
             let service = service_fn(move |req| {
                 let state = state.clone();
@@ -173,30 +149,11 @@ fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-fn build_tls_config(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfig> {
-    let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .context("parsing cert PEM")?;
-
-    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
-        .context("parsing key PEM")?
-        .context("no private key found")?;
-
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .context("building TLS config")?;
-
-    Ok(config)
-}
-
 /// Print the pairing QR code.
 pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
     let token = auth::load_or_generate_pairing_token(data_dir)?;
     let ip = auth::local_ip().unwrap_or_else(|| "localhost".to_string());
-    // HTTPS URL so scanning the QR opens the browser directly.
-    // Token in hash fragment so it's not sent to the server in the URL.
-    let url = format!("https://{ip}:{port}/#{token}");
+    let url = format!("http://{ip}:{port}/#{token}");
 
     auth::print_qr(&url);
     Ok(())
@@ -270,26 +227,5 @@ mod tests {
             .body(Full::new(Bytes::new()))
             .unwrap();
         assert_eq!(extract_bearer(&req).as_deref(), Some(""));
-    }
-
-    #[test]
-    fn build_tls_config_from_generated_cert() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let dir = std::env::temp_dir().join(format!("devg-tls-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let (cert_pem, key_pem, _fp) = auth::load_or_generate_tls(&dir).unwrap();
-        let config = build_tls_config(&cert_pem, &key_pem);
-        assert!(config.is_ok());
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn build_tls_config_bad_pem_fails() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let result = build_tls_config("not a cert", "not a key");
-        assert!(result.is_err());
     }
 }

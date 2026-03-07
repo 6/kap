@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -22,62 +22,6 @@ pub struct PairedDevice {
     pub token_hash: String,
     pub paired_at: String,
     pub last_seen: String,
-}
-
-/// Generate a self-signed ECDSA TLS certificate, or load existing one.
-/// Returns (cert_pem, key_pem, cert_sha256_hex).
-pub fn load_or_generate_tls(dir: &Path) -> Result<(String, String, String)> {
-    std::fs::create_dir_all(dir).context("creating remote data dir")?;
-
-    let cert_path = dir.join("cert.pem");
-    let key_path = dir.join("key.pem");
-
-    if cert_path.exists() && key_path.exists() {
-        let cert_pem = std::fs::read_to_string(&cert_path).context("reading cert.pem")?;
-        let key_pem = std::fs::read_to_string(&key_path).context("reading key.pem")?;
-        let fingerprint = cert_sha256(&cert_pem)?;
-        return Ok((cert_pem, key_pem, fingerprint));
-    }
-
-    eprintln!("[remote] generating self-signed TLS certificate");
-
-    let params = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-        .context("creating cert params")?;
-    // rcgen 0.13 infers algorithm from the key pair
-
-    let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-        .context("generating key pair")?;
-    let cert = params
-        .self_signed(&key_pair)
-        .context("self-signing certificate")?;
-
-    let cert_pem = cert.pem();
-    let key_pem = key_pair.serialize_pem();
-
-    std::fs::write(&cert_path, &cert_pem).context("writing cert.pem")?;
-    std::fs::write(&key_path, &key_pem).context("writing key.pem")?;
-
-    // Restrict key file permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    let fingerprint = cert_sha256(&cert_pem)?;
-    Ok((cert_pem, key_pem, fingerprint))
-}
-
-/// Compute SHA-256 fingerprint of a PEM certificate (over the DER bytes).
-fn cert_sha256(pem: &str) -> Result<String> {
-    let der = pem
-        .lines()
-        .filter(|l| !l.starts_with("-----"))
-        .collect::<String>();
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &der)
-        .context("decoding cert PEM")?;
-    let hash = Sha256::digest(&bytes);
-    Ok(hex::encode(hash))
 }
 
 /// Load or generate the pairing token.
@@ -104,10 +48,10 @@ pub fn load_or_generate_pairing_token(dir: &Path) -> Result<String> {
     Ok(token)
 }
 
-/// Generate a random token as base64url (11 chars).
+/// Generate a random token as base64url (22 chars / 128 bits).
 fn generate_token() -> String {
     use rand::RngCore;
-    let mut bytes = [0u8; 8];
+    let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
@@ -312,22 +256,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn generate_and_load_tls() {
-        let dir = temp_dir("tls");
-        let (cert1, key1, fp1) = load_or_generate_tls(&dir).unwrap();
-        assert!(cert1.contains("BEGIN CERTIFICATE"));
-        assert!(key1.contains("BEGIN PRIVATE KEY"));
-        assert_eq!(fp1.len(), 64); // SHA-256 hex
-
-        // Loading again returns the same cert
-        let (cert2, _key2, fp2) = load_or_generate_tls(&dir).unwrap();
-        assert_eq!(cert1, cert2);
-        assert_eq!(fp1, fp2);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
