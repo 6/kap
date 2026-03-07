@@ -18,7 +18,7 @@ Single Rust binary with four enforcement layers:
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
 3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Tool-level allowlist filtering and credential isolation. Only starts when `[mcp]` is in config. Auth stored in `~/.devg/auth/` via `devg mcp add`; servers must be listed in devg.toml with `allow_tools`.
-4. **gh proxy** (:3130): proxies `gh` CLI commands from the app container. GH_TOKEN stays on the sidecar; the app container gets a shim script. Command allowlist in `[gh]` config. `gh auth token` and `gh api` are always blocked.
+4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Credentials stay on the sidecar; the app container gets shim scripts. Per-tool allow/deny in `[[cli.tools]]` config.
 
 ## Key modules
 
@@ -36,8 +36,9 @@ Single Rust binary with four enforcement layers:
 - `src/mcp/auth.rs`:`devg auth` command: OAuth 2.1 (metadata discovery, dynamic client registration, PKCE, browser callback)
 - `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config
 - `src/init_env.rs`:runs as `initializeCommand`; regenerates compose overlay, writes `.env`, generates gh shim
-- `src/gh/mod.rs`:gh CLI proxy HTTP listener, process spawning
-- `src/gh/filter.rs`:gh command allowlist (always blocks `auth token`, `api`)
+- `src/cli/mod.rs`:CLI proxy HTTP listener, process spawning, multi-tool routing
+- `src/cli/filter.rs`:command allow/deny filtering (generic, per-tool)
+- `src/cli/shim.rs`:client-side shim (runs in app container, forwards to sidecar)
 - `src/check.rs`:proxy health check (for Docker healthcheck)
 
 ## Testing policy
