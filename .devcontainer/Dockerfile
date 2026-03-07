@@ -26,6 +26,8 @@ CMD ["devg", "proxy"]
 FROM ubuntu:24.04 AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git zsh sudo build-essential pkg-config dnsutils \
+    jq ripgrep fd-find locales \
+    && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/devg /usr/local/bin/devg
 # Create vscode user (matches devcontainer convention)
