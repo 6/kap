@@ -107,16 +107,76 @@ pub fn list() -> Result<()> {
         println!("No running devcontainers.");
         return Ok(());
     }
-    for g in &groups {
+
+    let stats = collect_stats();
+
+    for (i, g) in groups.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
         let healthy =
             crate::remote::containers::exec_exit_code(&g.sidecar, &["devg", "check", "--proxy"])
                 == 0;
-        let status = if healthy { "healthy" } else { "unhealthy" };
-        println!("\x1b[1m{}\x1b[0m  {}", g.project, status);
-        println!("  app:     {}", g.app);
-        println!("  sidecar: {}", g.sidecar);
+        let status_icon = if healthy {
+            "\x1b[32m●\x1b[0m"
+        } else {
+            "\x1b[31m●\x1b[0m"
+        };
+        let status_text = if healthy { "healthy" } else { "unhealthy" };
+
+        println!("{status_icon} \x1b[1m{}\x1b[0m  {status_text}", g.project);
+
+        print_container_line("  app", &g.app, &stats);
+        print_container_line("  devg", &g.sidecar, &stats);
     }
     Ok(())
+}
+
+struct ContainerStats {
+    cpu: String,
+    mem: String,
+}
+
+fn collect_stats() -> std::collections::HashMap<String, ContainerStats> {
+    let output = Command::new("docker")
+        .args([
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}",
+        ])
+        .output()
+        .ok();
+
+    let mut map = std::collections::HashMap::new();
+    if let Some(output) = output {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                let name = parts[0].trim().to_string();
+                let cpu = parts[1].trim().to_string();
+                // Just the usage part, not the "/ limit"
+                let mem = parts[2].split('/').next().unwrap_or("").trim().to_string();
+                map.insert(name, ContainerStats { cpu, mem });
+            }
+        }
+    }
+    map
+}
+
+fn print_container_line(
+    label: &str,
+    container: &str,
+    stats: &std::collections::HashMap<String, ContainerStats>,
+) {
+    match stats.get(container) {
+        Some(s) => println!(
+            "  {label:<6} {container}  \x1b[2mcpu {:<6} mem {}\x1b[0m",
+            s.cpu, s.mem
+        ),
+        None => println!("  {label:<6} {container}"),
+    }
 }
 
 /// Resolve project name: if given, validate it exists; if not, derive from CWD.
