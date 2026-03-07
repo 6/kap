@@ -39,3 +39,6 @@ name = "context7"
 upstream = "https://mcp.context7.com/mcp"
 headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
 # allow_tools = ["resolve-library-id", "get-library-docs"]
+
+[[mcp.servers]]
+name = "linear"

@@ -13,8 +13,9 @@ use url::Url;
 
 use super::upstream::StoredAuth;
 
-/// Run the OAuth flow for a named MCP server and store the resulting tokens.
-pub async fn run(name: &str, upstream: &str, auth_dir: &str) -> Result<()> {
+/// Run the OAuth flow for a named MCP server and return the resulting tokens.
+/// Callers are responsible for persisting (keychain + file).
+pub async fn run(_name: &str, upstream: &str) -> Result<StoredAuth> {
     let upstream_url = Url::parse(upstream).context("invalid upstream URL")?;
     let http = reqwest::Client::new();
 
@@ -95,7 +96,7 @@ pub async fn run(name: &str, upstream: &str, auth_dir: &str) -> Result<()> {
 
     let token_resp: TokenResponse = resp.json().await.context("parsing token response")?;
 
-    // 7. Store tokens
+    // 7. Build stored auth
     let expires_at = token_resp.expires_in.map(|secs| {
         let expiry = chrono::Utc::now() + chrono::Duration::seconds(secs);
         expiry.to_rfc3339()
@@ -111,18 +112,34 @@ pub async fn run(name: &str, upstream: &str, auth_dir: &str) -> Result<()> {
         expires_at,
     };
 
+    eprintln!("[auth] done");
+    Ok(stored)
+}
+
+/// Write a StoredAuth to a JSON file on disk (runtime cache for containers).
+/// File is created with mode 0600 (owner read/write only).
+pub fn write_auth_file(name: &str, auth: &StoredAuth, auth_dir: &str) -> Result<()> {
     let auth_path = Path::new(auth_dir);
     std::fs::create_dir_all(auth_path)
         .with_context(|| format!("creating {}", auth_path.display()))?;
-
     let file_path = auth_path.join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(&stored)?;
-    std::fs::write(&file_path, &json)
+    let json = serde_json::to_string_pretty(auth)?;
+    write_private(&file_path, &json)
         .with_context(|| format!("writing {}", file_path.display()))?;
+    Ok(())
+}
 
-    eprintln!("[auth] tokens saved to {}", file_path.display());
-    eprintln!("[auth] done");
-
+/// Write a file with mode 0600 (owner read/write only).
+pub fn write_private(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(content.as_bytes())?;
     Ok(())
 }
 

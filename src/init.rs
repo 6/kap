@@ -244,6 +244,7 @@ services:
     image: ghcr.io/6/devg:latest
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
+      - ${{HOME}}/.devg/auth:/etc/devg/auth
     # Credentials from devg init-env (GH_TOKEN, API keys, etc.)
     env_file:
       - path: .env
@@ -308,6 +309,7 @@ fn generate_docker_compose(project_name: &str) -> String {
     image: ghcr.io/6/devg:latest
     volumes:
       - ./devg.toml:/etc/devg/config.toml:ro
+      - ${{HOME}}/.devg/auth:/etc/devg/auth
     # Credentials from devg init-env (GH_TOKEN, API keys, etc.)
     env_file:
       - path: .env

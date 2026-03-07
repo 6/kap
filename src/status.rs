@@ -87,8 +87,37 @@ pub fn run() -> Result<()> {
     if let Some(ref mcp) = config.mcp
         && !mcp.servers.is_empty()
     {
-        println!();
-        println!("  MCP");
+        let host_auth_dir = crate::mcp::auth::host_auth_dir();
+        let available = crate::mcp::list_auth_files(&host_auth_dir);
+
+        // Pre-flight: validate credentials for all project MCP servers
+        for server in &mcp.servers {
+            if let Some(ref env_var) = server.token_env {
+                match std::env::var(env_var) {
+                    Ok(val) if !val.is_empty() => {}
+                    _ => bad(
+                        &format!("{}: ${env_var} is not set or empty", server.name),
+                        &mut fail,
+                    ),
+                }
+            } else if server.headers.is_empty() {
+                // OAuth server — check auth file exists
+                let auth_path = std::path::Path::new(&host_auth_dir)
+                    .join(format!("{}.json", server.name));
+                if !auth_path.exists() {
+                    let hint = if available.is_empty() {
+                        format!("run `devg mcp add {} <upstream>`", server.name)
+                    } else {
+                        format!(
+                            "available: {}. run `devg mcp add {} <upstream>` or check for typos",
+                            available.join(", "),
+                            server.name
+                        )
+                    };
+                    bad(&format!("{}: no auth registered ({})", server.name, hint), &mut fail);
+                }
+            }
+        }
 
         if exec_exit_code(&app, &["bash", "-c", &format!("echo > /dev/tcp/{PROXY_IP}/3129")]) == 0 {
             ok("MCP proxy reachable", &mut pass);

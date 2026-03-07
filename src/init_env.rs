@@ -49,6 +49,55 @@ pub fn run(project_dir: &str) -> Result<()> {
         std::fs::write(&env_path, "")?;
     }
 
+    // Sync keychain → ~/.devg/auth/ for OAuth MCP servers
+    sync_auth_from_keychain(&config_path)?;
+
+    Ok(())
+}
+
+/// Sync MCP OAuth tokens from keychain to ~/.devg/auth/ files.
+/// Ensures containers start with fresh tokens.
+fn sync_auth_from_keychain(config_path: &Path) -> Result<()> {
+    use crate::keychain;
+    use crate::mcp::upstream::StoredAuth;
+
+    if !keychain::is_available() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config: crate::config::Config = toml::from_str(&content)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+
+    let Some(mcp) = &config.mcp else {
+        return Ok(());
+    };
+
+    let host_auth_dir = crate::mcp::auth::host_auth_dir();
+
+    for server in &mcp.servers {
+        // Skip servers using token_env (no OAuth)
+        if server.token_env.is_some() {
+            continue;
+        }
+
+        let name = &server.name;
+        let Ok(json) = keychain::load(name) else {
+            continue;
+        };
+        let Ok(auth) = serde_json::from_str::<StoredAuth>(&json) else {
+            continue;
+        };
+
+        // Write to ~/.devg/auth/<name>.json
+        if let Err(e) = crate::mcp::auth::write_auth_file(name, &auth, &host_auth_dir) {
+            eprintln!("[init-env] warning: failed to sync {name} from keychain: {e}");
+            continue;
+        }
+        eprintln!("[init-env] synced {name} from keychain");
+    }
+
     Ok(())
 }
 

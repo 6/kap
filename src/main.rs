@@ -1,9 +1,11 @@
 mod check;
 mod config;
+mod keychain;
 mod status;
 mod init;
 mod init_env;
 mod mcp;
+mod mcp_cmd;
 mod proxy;
 
 use std::sync::Arc;
@@ -59,9 +61,15 @@ enum Command {
     },
     /// Check if devcontainer-guard is working (runs checks via docker exec)
     Status,
-    /// Authenticate with a remote MCP server (OAuth 2.1)
+    /// Manage MCP server registrations
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Authenticate with a remote MCP server (hidden alias for `mcp add`)
+    #[command(hide = true)]
     Auth {
-        /// Name for this MCP server (used in config and token storage)
+        /// Name for this MCP server
         name: String,
 
         /// Upstream MCP server URL
@@ -74,6 +82,29 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum McpCommand {
+    /// Register an MCP server (OAuth 2.1 authentication)
+    Add {
+        /// Name for this MCP server (e.g. "linear", "github")
+        name: String,
+
+        /// Upstream MCP server URL (e.g. "https://mcp.linear.app/")
+        upstream: String,
+
+        /// Force re-authentication even if already registered
+        #[arg(long)]
+        reauth: bool,
+    },
+    /// List registered MCP servers
+    List,
+    /// Remove a registered MCP server
+    Remove {
+        /// Name of the server to remove
+        name: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -82,8 +113,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Proxy { observe, config } => {
             let cfg = config::Config::load(&config)?;
 
+            let mcp_domains = cfg.mcp_upstream_domains();
+            let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();
+            all_allow.extend(mcp_domains);
             let allowlist = Arc::new(proxy::allowlist::Allowlist::new(
-                cfg.allow_domains(),
+                &all_allow,
                 &cfg.proxy.network.deny,
             ));
 
@@ -136,13 +170,25 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
+        Command::Mcp { command } => match command {
+            McpCommand::Add {
+                name,
+                upstream,
+                reauth,
+            } => mcp_cmd::add(&name, &upstream, reauth).await,
+            McpCommand::List => mcp_cmd::list(),
+            McpCommand::Remove { name } => mcp_cmd::remove(&name),
+        },
         Command::Auth {
             name,
             upstream,
             auth_dir,
         } => {
             let dir = auth_dir.unwrap_or_else(mcp::auth::host_auth_dir);
-            mcp::auth::run(&name, &upstream, &dir).await
+            let stored = mcp::auth::run(&name, &upstream).await?;
+            mcp::auth::write_auth_file(&name, &stored, &dir)?;
+            eprintln!("[auth] tokens saved to {dir}/{name}.json");
+            Ok(())
         }
     }
 }
