@@ -24,7 +24,7 @@ kap up
 
 ## Domain allowlist
 
-The config is a flat domain allowlist in `kap.toml`. `kap init` generates a starting list with safe defaults for common ecosystems (GitHub, npm, PyPI, RubyGems, crates.io, Maven, CocoaPods, Go, APT, and AI providers).
+`kap init` generates a `kap.toml` with a domain allowlist. Defaults cover common package managers, registries, and AI providers.
 
 ```toml
 [proxy.network]
@@ -43,11 +43,9 @@ Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules 
 
 ## MCP proxy
 
-The MCP proxy sits between the agent and remote MCP servers. The agent connects to the proxy over unauthenticated HTTP on the internal network. The proxy injects credentials when forwarding to the upstream server. The app container has no access to OAuth tokens, API keys, or any other secrets.
+The MCP proxy sits between the agent and remote MCP servers, injecting credentials when forwarding upstream. The app container never sees tokens or API keys.
 
-### Registering servers
-
-Register MCP servers on the host:
+Register servers on the host:
 
 ```bash
 # OAuth (opens browser)
@@ -60,11 +58,7 @@ kap mcp list          # see registered servers
 kap mcp get linear    # show details + tools list
 ```
 
-After registering, add each server to `kap.toml` with an `allow_tools` list (see below). The agent connects to `http://172.28.0.3:3129/<name>` instead of the real server. kap handles auth and tool filtering.
-
-### Tool allowlist
-
-Each server needs a `[[mcp.servers]]` entry in `kap.toml` with an explicit `allow_tools` list. Same model as the domain allowlist - only what's listed is permitted:
+Then add each server to `kap.toml` with an `allow_tools` list:
 
 ```toml
 [mcp]
@@ -84,7 +78,7 @@ Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_us
 
 ## CLI proxy
 
-The CLI proxy lets the app container run tools like `gh` or `aws` without direct access to credentials. Commands are forwarded to the sidecar which validates them against an allowlist and executes with the configured env vars.
+The CLI proxy lets the app container run tools like `gh` or `aws` without direct access to credentials.
 
 ```toml
 [cli]
@@ -132,13 +126,7 @@ Scan the QR code on your phone to open the web UI. It auto-pairs and gives you:
 - **Logs** -live streaming proxy events, filterable by denied-only
 - **Agent** -Claude Code session timelines, tool calls, cancel button, follow-up prompts
 
-The daemon runs on the host and uses `docker exec` to reach into both containers. All API endpoints require a bearer token issued during QR pairing. Settings for light/dark mode and font size.
-
-```bash
-kap remote pair     # show QR code again
-kap remote devices  # list paired devices
-kap remote revoke <id>  # revoke a device
-```
+The daemon runs on the host. All API endpoints require a bearer token issued during QR pairing.
 
 ## Architecture
 
@@ -210,7 +198,7 @@ cargo test           # run all tests
 cargo clippy         # lint
 ```
 
-This repo includes a `.devcontainer/` that dogfoods kap itself. It builds from source, runs with GitHub/Rust/APT/AI domains allowed, and proxies [Context7](https://context7.com) as a sample MCP server. Set `CONTEXT7_API_KEY` in your environment to try it (free key from context7.com/dashboard). Open in VS Code or run:
+This repo dogfoods kap via its own `.devcontainer/`. Open in VS Code or run:
 
 ```bash
 kap up
