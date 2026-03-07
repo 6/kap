@@ -96,6 +96,7 @@ enum Command {
 #[derive(Subcommand)]
 enum McpCommand {
     /// Register an MCP server (OAuth 2.1 or static headers)
+    #[command(override_usage = "devg mcp add <NAME> <UPSTREAM> [--header KEY=VALUE ...]")]
     Add {
         /// Name for this MCP server (e.g. "linear", "github")
         name: String,
