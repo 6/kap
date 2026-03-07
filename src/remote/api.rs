@@ -516,7 +516,7 @@ fn resolve_containers<B>(req: &Request<B>) -> Result<(String, String)> {
             match groups.len() {
                 0 => anyhow::bail!(
                     "no running devcontainer found with devg networking.\n\n  \
-                     Start it with: devcontainer up"
+                     Start it with: devg up"
                 ),
                 1 => Ok((groups[0].app.clone(), groups[0].sidecar.clone())),
                 n => anyhow::bail!(

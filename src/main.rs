@@ -1,6 +1,7 @@
 mod check;
 mod cli;
 mod config;
+mod container;
 mod init;
 mod init_env;
 mod mcp;
@@ -45,6 +46,24 @@ enum Command {
         /// Skip confirmation prompts
         #[arg(short, long)]
         yes: bool,
+    },
+    /// Start the devcontainer
+    Up {
+        /// Remove and recreate the container from scratch
+        #[arg(long)]
+        reset: bool,
+    },
+    /// Stop and remove the devcontainer
+    Down {
+        /// Also remove named volumes
+        #[arg(short, long)]
+        volumes: bool,
+    },
+    /// Run a command in the devcontainer (default: interactive shell)
+    Exec {
+        /// Command and arguments to run
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        cmd: Vec<String>,
     },
     /// Check proxy health (for container healthcheck)
     Check {
@@ -212,6 +231,9 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Init { project_dir, yes } => init::run(&project_dir, yes),
+        Command::Up { reset } => container::up(reset),
+        Command::Down { volumes } => container::down(volumes),
+        Command::Exec { cmd } => container::exec(cmd),
         Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
@@ -241,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "no running devg sidecar found.\n\n  \
-                         Start it with: devcontainer up"
+                         Start it with: devg up"
                         )
                     })?;
                 cmd.arg(sidecar);

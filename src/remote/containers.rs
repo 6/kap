@@ -23,7 +23,7 @@ pub fn find_containers() -> Result<(String, String)> {
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "no running devcontainer found with devg networking.\n\n  \
-                 Start it with: devcontainer up"
+                 Start it with: devg up"
             )
         })
 }
