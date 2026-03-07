@@ -27,7 +27,7 @@ Single Rust binary with five components:
 ## Key modules
 
 - `src/main.rs`:clap CLI dispatch
-- `src/config.rs`:TOML config parsing (domain lists, MCP server configs, `[compose]` section)
+- `src/config.rs`:TOML config parsing (domain lists, MCP server configs, `ssh_agent`, `[compose]` section)
 - `src/proxy/mod.rs`:HTTP/HTTPS forward proxy (hyper + tokio)
 - `src/proxy/dns.rs`:DNS forwarder with domain filtering (prevents DNS exfiltration, not redundant with HTTP proxy)
 - `src/proxy/allowlist.rs`:wildcard domain matching, deny-overrides-allow (shared by HTTP proxy, DNS, and MCP proxy)
@@ -89,6 +89,14 @@ The `[compose]` section in `kap.toml` controls how the kap sidecar image is sour
 - Build from source: `[compose] build = { context = "..", dockerfile = "...", target = "..." }`
 
 DO NOT edit `docker-compose.kap.yml` directly. Changes will be overwritten. Edit `kap.toml` instead.
+
+## SSH agent forwarding
+
+Controlled by `ssh_agent = true` (default) in `kap.toml`. The overlay generation in `src/init.rs` (`generate_overlay()`) conditionally adds the SSH volume mount and `SSH_AUTH_SOCK` env var to the app service. Detection logic is in `detect_ssh_auth_sock()`:
+
+- **macOS**: mounts Docker Desktop's `/run/host-services/ssh-auth.sock` (avoids VM socket-sharing issues with direct bind mounts). Requires the host SSH agent to be visible to Docker Desktop (e.g. via a LaunchAgent).
+- **Linux**: bind-mounts `$SSH_AUTH_SOCK` directly (Docker runs natively, no VM boundary).
+- **Disabled / no agent**: mount is omitted entirely, no error.
 
 ## Security model
 

@@ -27,6 +27,14 @@ kap exec                          # shell into it
 
 From inside the container, install and run Claude Code, Codex, or any AI agent. All network access is gated by the sidecar.
 
+## SSH agent forwarding
+
+The host SSH agent is forwarded into the container by default, enabling `git clone` over SSH, commit signing, etc. On macOS this uses Docker Desktop's built-in SSH forwarding; on Linux it bind-mounts `$SSH_AUTH_SOCK` directly.
+
+```toml
+ssh_agent = true   # set to false to disable
+```
+
 ## Domain allowlist
 
 `kap init` generates a `kap.toml` with a domain allowlist. Defaults cover common package managers, registries, and AI providers.
