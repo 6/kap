@@ -6,7 +6,7 @@ COPY src/ src/
 RUN cargo build --release && cp target/release/devg /usr/local/bin/devg
 
 # Proxy sidecar: devg binary + gh CLI.
-# Runs domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129), gh proxy (:3130).
+# Runs domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129), CLI proxy (:3130).
 FROM debian:bookworm-slim AS proxy
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
@@ -36,11 +36,25 @@ RUN userdel -r ubuntu 2>/dev/null; \
     && useradd -u 1000 -g 1000 -m -s /bin/zsh vscode \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER vscode
-# Simple zsh prompt
-RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > /home/vscode/.zshrc
-# Install Rust toolchain for development
+
+# Install mise
+RUN curl https://mise.jdx.dev/install.sh | sh
+ENV PATH="/home/vscode/.local/share/mise/shims:/home/vscode/.local/bin:${PATH}"
+
+# Install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     --default-toolchain stable \
     --component clippy,rustfmt
 ENV PATH="/home/vscode/.cargo/bin:${PATH}"
+
+# Install Claude Code
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/home/vscode/.local/bin:/home/vscode/.claude/bin:${PATH}"
+
+# Shell config (prompt, mise activation, aliases, onboarding)
+RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > ~/.zshrc \
+    && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc \
+    && echo 'alias ccd="claude --dangerously-skip-permissions"' >> ~/.zshrc \
+    && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json
+
 WORKDIR /home/vscode
