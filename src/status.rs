@@ -148,16 +148,10 @@ pub fn run() -> Result<()> {
         // Pre-flight: identify servers without credentials (already shown in config summary)
         let mut servers_without_auth: Vec<String> = Vec::new();
         for server in &mcp.servers {
-            if let Some(ref env_var) = server.token_env {
-                if std::env::var(env_var).map(|v| v.is_empty()).unwrap_or(true) {
-                    servers_without_auth.push(server.name.clone());
-                }
-            } else if server.headers.is_empty() {
-                let auth_path =
-                    std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
-                if !auth_path.exists() {
-                    servers_without_auth.push(server.name.clone());
-                }
+            let auth_path =
+                std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
+            if !auth_path.exists() {
+                servers_without_auth.push(server.name.clone());
             }
         }
 
@@ -306,7 +300,7 @@ fn print_config_summary(config: &crate::config::Config) {
             let registered = crate::mcp::list_auth_files(&host_auth_dir);
             println!("    mcp:");
             for s in &mcp.servers {
-                if s.token_env.is_some() || registered.contains(&s.name) {
+                if registered.contains(&s.name) {
                     println!("      \x1b[32m✓\x1b[0m \x1b[1m{}\x1b[0m", s.name);
                 } else {
                     println!(

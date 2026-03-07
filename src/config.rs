@@ -88,7 +88,7 @@ impl Config {
         &self.proxy.network.allow
     }
 
-    /// Collect domains from MCP server upstream URLs (from config and auth files).
+    /// Collect domains from MCP server upstream URLs (from auth files).
     /// These are implicitly allowed so the MCP proxy can reach its upstreams.
     pub fn mcp_upstream_domains(&self) -> Vec<String> {
         let Some(ref mcp) = self.mcp else {
@@ -98,12 +98,7 @@ impl Config {
         mcp.servers
             .iter()
             .filter_map(|s| {
-                // Try config upstream first, then fall back to auth file
-                let upstream = s
-                    .upstream
-                    .clone()
-                    .or_else(|| upstream_from_auth_file(auth_dir, &s.name));
-                upstream
+                upstream_from_auth_file(auth_dir, &s.name)
                     .and_then(|u| url::Url::parse(&u).ok())
                     .and_then(|u| u.host_str().map(String::from))
             })
@@ -144,15 +139,13 @@ pub struct McpConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct McpServerConfig {
     pub name: String,
-    /// Upstream MCP server URL. Optional if auth file exists (resolved from there).
-    pub upstream: Option<String>,
-    /// Env var to use as Bearer token (e.g., "GH_TOKEN"). Skips OAuth auth file.
-    pub token_env: Option<String>,
     /// Extra headers to send upstream. Values with ${VAR} are expanded from env.
     #[serde(default)]
     pub headers: HashMap<String, String>,
     #[serde(default)]
-    pub allow_tools: Vec<String>,
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
 }
 
 /// Read the upstream URL from an auth file.
@@ -280,12 +273,10 @@ auth_dir = "/tmp/auth"
 
 [[mcp.servers]]
 name = "github"
-upstream = "https://mcp.github.com"
-allow_tools = ["get_pull_request", "list_issues"]
+allow = ["get_pull_request", "list_issues"]
 
 [[mcp.servers]]
 name = "filesystem"
-upstream = "https://mcp.example.com/fs"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         let mcp = config.mcp.unwrap();
@@ -295,16 +286,12 @@ upstream = "https://mcp.example.com/fs"
 
         assert_eq!(mcp.servers[0].name, "github");
         assert_eq!(
-            mcp.servers[0].upstream.as_deref(),
-            Some("https://mcp.github.com")
-        );
-        assert_eq!(
-            mcp.servers[0].allow_tools,
+            mcp.servers[0].allow,
             vec!["get_pull_request", "list_issues"]
         );
 
         assert_eq!(mcp.servers[1].name, "filesystem");
-        assert!(mcp.servers[1].allow_tools.is_empty());
+        assert!(mcp.servers[1].allow.is_empty());
     }
 
     #[test]
@@ -314,33 +301,19 @@ upstream = "https://mcp.example.com/fs"
     }
 
     #[test]
-    fn parse_mcp_token_env() {
+    fn parse_mcp_deny() {
         let toml = r#"
 [mcp]
 
 [[mcp.servers]]
 name = "github"
-upstream = "https://mcp.github.com"
-token_env = "GH_TOKEN"
-allow_tools = ["get_pull_request"]
+allow = ["*"]
+deny = ["delete_*"]
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         let mcp = config.mcp.unwrap();
-        assert_eq!(mcp.servers[0].token_env.as_deref(), Some("GH_TOKEN"));
-    }
-
-    #[test]
-    fn parse_mcp_no_token_env() {
-        let toml = r#"
-[mcp]
-
-[[mcp.servers]]
-name = "github"
-upstream = "https://mcp.github.com"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let mcp = config.mcp.unwrap();
-        assert!(mcp.servers[0].token_env.is_none());
+        assert_eq!(mcp.servers[0].allow, vec!["*"]);
+        assert_eq!(mcp.servers[0].deny, vec!["delete_*"]);
     }
 
     #[test]
@@ -367,7 +340,6 @@ listen = "0.0.0.0:1234"
 
 [[mcp.servers]]
 name = "test"
-upstream = "https://example.com"
 headers = { "X-Api-Key" = "${API_KEY}", "Accept" = "application/json" }
 "#;
         let config: Config = toml::from_str(toml).unwrap();
@@ -375,20 +347,6 @@ headers = { "X-Api-Key" = "${API_KEY}", "Accept" = "application/json" }
         assert_eq!(mcp.servers[0].headers.len(), 2);
         assert_eq!(mcp.servers[0].headers["X-Api-Key"], "${API_KEY}");
         assert_eq!(mcp.servers[0].headers["Accept"], "application/json");
-    }
-
-    #[test]
-    fn mcp_server_upstream_optional() {
-        let toml = r#"
-[mcp]
-
-[[mcp.servers]]
-name = "linear"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let mcp = config.mcp.unwrap();
-        assert_eq!(mcp.servers[0].name, "linear");
-        assert!(mcp.servers[0].upstream.is_none());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 /// Generate .devcontainer/.env and docker-compose.kap.yml from host environment.
 ///
 /// Reads kap.toml to find which env vars the proxy sidecar needs
-/// (from token_env and ${VAR} references in headers), then writes
+/// (from ${VAR} references in headers and CLI tool env lists), then writes
 /// them to .env so docker-compose passes them to the container.
 ///
 /// Also regenerates the compose overlay (docker-compose.kap.yml) so it
@@ -207,10 +207,6 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
 
     if let Some(mcp) = &config.mcp {
         for server in &mcp.servers {
-            // token_env is itself an env var name
-            if let Some(ref var) = server.token_env {
-                vars.push(var.clone());
-            }
             // headers can contain ${VAR} references
             for value in server.headers.values() {
                 extract_env_refs(value, &mut vars);
@@ -396,19 +392,17 @@ mod tests {
 [mcp]
 [[mcp.servers]]
 name = "a"
-upstream = "https://a.com"
-token_env = "A_TOKEN"
+headers = { "X-Key" = "${A_API_KEY}" }
 
 [[mcp.servers]]
 name = "b"
-upstream = "https://b.com"
 headers = { "X-Key" = "${B_API_KEY}", "X-Other" = "${C_SECRET}" }
 "#,
         )
         .unwrap();
 
         let vars = vars_from_config(&path).unwrap();
-        assert_eq!(vars, vec!["A_TOKEN", "B_API_KEY", "C_SECRET"]);
+        assert_eq!(vars, vec!["A_API_KEY", "B_API_KEY", "C_SECRET"]);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

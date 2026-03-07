@@ -659,7 +659,7 @@ allow = [
 # [mcp]
 # [[mcp.servers]]
 # name = "github"
-# allow_tools = ["get_pull_request", "list_issues"]
+# allow = ["get_pull_request", "list_issues"]
 {cli_section}"#
     )
 }

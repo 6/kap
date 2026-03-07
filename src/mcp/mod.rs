@@ -57,72 +57,33 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
             })
             .collect();
 
-        // token_env takes priority, then auth file from `kap mcp add`, then headers-only
-        let has_headers = !headers.is_empty();
-        let client = if let Some(ref env_var) = server_cfg.token_env {
-            let Some(ref upstream) = server_cfg.upstream else {
-                eprintln!(
-                    "[mcp] skipping {}: upstream is required when using token_env",
-                    server_cfg.name
-                );
-                continue;
-            };
-            match std::env::var(env_var) {
-                Ok(token) if !token.is_empty() => {
-                    eprintln!("[mcp] {} using token from ${env_var}", server_cfg.name);
-                    UpstreamClient::with_static_token(upstream.clone(), token, headers)
-                }
-                _ => {
-                    eprintln!(
-                        "[mcp] skipping {}: ${env_var} is not set or empty",
-                        server_cfg.name
-                    );
-                    continue;
+        // Auth comes from `kap mcp add` (stored in auth file). Config headers are merged.
+        let auth_path = Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
+        let client = match StoredAuth::load(&auth_path) {
+            Ok(auth) => {
+                let upstream = auth.upstream.clone();
+                // Merge headers: auth file headers + config headers (config wins)
+                let mut all_headers: Vec<(String, String)> = auth
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                all_headers.extend(headers);
+                let has_token = !auth.access_token.is_empty();
+                if has_token {
+                    UpstreamClient::new(upstream, auth, all_headers, Some(auth_path))
+                } else {
+                    UpstreamClient::with_headers_only(upstream, all_headers)
                 }
             }
-        } else {
-            let auth_path = Path::new(&config.auth_dir).join(format!("{}.json", server_cfg.name));
-            match StoredAuth::load(&auth_path) {
-                Ok(auth) => {
-                    // upstream from config wins, otherwise fall back to auth file
-                    let upstream = server_cfg
-                        .upstream
-                        .clone()
-                        .unwrap_or_else(|| auth.upstream.clone());
-                    // Merge headers: auth file headers + config headers (config wins)
-                    let mut all_headers: Vec<(String, String)> = auth
-                        .headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    all_headers.extend(headers);
-                    let has_token = !auth.access_token.is_empty();
-                    if has_token {
-                        UpstreamClient::new(upstream, auth, all_headers, Some(auth_path))
-                    } else {
-                        UpstreamClient::with_headers_only(upstream, all_headers)
-                    }
-                }
-                Err(_) if has_headers => {
-                    let Some(ref upstream) = server_cfg.upstream else {
-                        eprintln!(
-                            "[mcp] skipping {}: upstream is required when using headers without auth",
-                            server_cfg.name
-                        );
-                        continue;
-                    };
-                    eprintln!("[mcp] {} using headers only (no OAuth)", server_cfg.name);
-                    UpstreamClient::with_headers_only(upstream.clone(), headers)
-                }
-                Err(e) => {
-                    let reason = format!("{e:#}");
-                    eprintln!("[mcp] skipping {}: {reason}", server_cfg.name);
-                    skipped.insert(server_cfg.name.clone(), reason);
-                    continue;
-                }
+            Err(e) => {
+                let reason = format!("{e:#}");
+                eprintln!("[mcp] skipping {}: {reason}", server_cfg.name);
+                skipped.insert(server_cfg.name.clone(), reason);
+                continue;
             }
         };
-        let filter = ToolFilter::new(&server_cfg.allow_tools);
+        let filter = ToolFilter::new(&server_cfg.allow, &server_cfg.deny);
 
         eprintln!("[mcp] {} → {}", server_cfg.name, client.upstream_url);
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
@@ -419,7 +380,7 @@ mod tests {
     }
 
     /// Start the MCP proxy with a given server config, return the proxy port.
-    async fn start_mcp_proxy(upstream_port: u16, allow_tools: &[&str]) -> u16 {
+    async fn start_mcp_proxy(upstream_port: u16, allow: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         // Keep listener bound — pass it to the spawned task to avoid TOCTOU
@@ -442,10 +403,8 @@ mod tests {
             None,
         );
         let filter_obj = ToolFilter::new(
-            &allow_tools
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
+            &allow.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &[],
         );
 
         let mut servers = HashMap::new();

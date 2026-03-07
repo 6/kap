@@ -1,9 +1,10 @@
-/// Tool name allowlist filtering.
+/// Tool name filtering with allow/deny lists.
 ///
-/// Same model as the domain allowlist: only explicitly allowed tools are permitted.
+/// Same model as the domain allowlist: deny overrides allow.
 /// Empty allow list = no tools allowed. Use `["*"]` to allow all.
 pub struct ToolFilter {
     allow: Vec<ToolPattern>,
+    deny: Vec<ToolPattern>,
 }
 
 enum ToolPattern {
@@ -12,14 +13,18 @@ enum ToolPattern {
 }
 
 impl ToolFilter {
-    pub fn new(allow: &[String]) -> Self {
+    pub fn new(allow: &[String], deny: &[String]) -> Self {
         Self {
             allow: allow.iter().map(|s| ToolPattern::parse(s)).collect(),
+            deny: deny.iter().map(|s| ToolPattern::parse(s)).collect(),
         }
     }
 
-    /// Check if a tool name is allowed. Empty allow list denies everything.
+    /// Check if a tool name is allowed. Deny overrides allow.
     pub fn is_allowed(&self, name: &str) -> bool {
+        if self.deny.iter().any(|p| p.matches(name)) {
+            return false;
+        }
         self.allow.iter().any(|p| p.matches(name))
     }
 }
@@ -51,14 +56,14 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        let f = ToolFilter::new(&s(&["read_file"]));
+        let f = ToolFilter::new(&s(&["read_file"]), &[]);
         assert!(f.is_allowed("read_file"));
         assert!(!f.is_allowed("write_file"));
     }
 
     #[test]
     fn wildcard_prefix() {
-        let f = ToolFilter::new(&s(&["search_*"]));
+        let f = ToolFilter::new(&s(&["search_*"]), &[]);
         assert!(f.is_allowed("search_code"));
         assert!(f.is_allowed("search_files"));
         assert!(!f.is_allowed("read_file"));
@@ -66,20 +71,28 @@ mod tests {
 
     #[test]
     fn empty_allow_denies_all() {
-        let f = ToolFilter::new(&[]);
+        let f = ToolFilter::new(&[], &[]);
         assert!(!f.is_allowed("anything"));
     }
 
     #[test]
     fn star_allows_all() {
-        let f = ToolFilter::new(&s(&["*"]));
+        let f = ToolFilter::new(&s(&["*"]), &[]);
         assert!(f.is_allowed("anything"));
         assert!(f.is_allowed(""));
     }
 
     #[test]
+    fn deny_overrides_allow() {
+        let f = ToolFilter::new(&s(&["*"]), &s(&["delete_*"]));
+        assert!(f.is_allowed("read_file"));
+        assert!(!f.is_allowed("delete_repo"));
+        assert!(!f.is_allowed("delete_file"));
+    }
+
+    #[test]
     fn tool_with_special_chars() {
-        let f = ToolFilter::new(&s(&["get/pull_request", "list-issues"]));
+        let f = ToolFilter::new(&s(&["get/pull_request", "list-issues"]), &[]);
         assert!(f.is_allowed("get/pull_request"));
         assert!(f.is_allowed("list-issues"));
         assert!(!f.is_allowed("get/push_request"));
@@ -87,7 +100,7 @@ mod tests {
 
     #[test]
     fn prefix_pattern_no_match_on_empty() {
-        let f = ToolFilter::new(&s(&["read_*"]));
+        let f = ToolFilter::new(&s(&["read_*"]), &[]);
         assert!(!f.is_allowed(""));
         assert!(f.is_allowed("read_file"));
     }

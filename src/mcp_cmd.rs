@@ -89,7 +89,7 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
     eprintln!();
     eprintln!("  [[mcp.servers]]");
     eprintln!("  name = \"{name}\"");
-    eprintln!("  allow_tools = [\"*\"]");
+    eprintln!("  allow = [\"*\"]");
     eprintln!();
 
     // Check if a kap container is already running — if so, hint about reset
@@ -137,7 +137,7 @@ pub fn list() -> Result<()> {
             if let Some(mcp) = &cfg.mcp {
                 mcp.servers
                     .iter()
-                    .filter(|s| !registered.contains(&s.name) && s.token_env.is_none())
+                    .filter(|s| !registered.contains(&s.name))
                     .map(|s| s.name.clone())
                     .collect()
             } else {

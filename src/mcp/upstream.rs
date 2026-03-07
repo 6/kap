@@ -68,25 +68,6 @@ impl UpstreamClient {
         }
     }
 
-    /// Create a client with a simple static Bearer token (no refresh).
-    pub fn with_static_token(
-        upstream_url: String,
-        token: String,
-        extra_headers: Vec<(String, String)>,
-    ) -> Self {
-        let auth = StoredAuth {
-            upstream: upstream_url.clone(),
-            client_id: String::new(),
-            client_secret: None,
-            access_token: token,
-            refresh_token: None,
-            token_endpoint: String::new(),
-            expires_at: None,
-            headers: Default::default(),
-        };
-        Self::new(upstream_url, auth, extra_headers, None)
-    }
-
     /// Create a client with only extra headers (no Bearer token).
     pub fn with_headers_only(upstream_url: String, extra_headers: Vec<(String, String)>) -> Self {
         let auth = StoredAuth {
@@ -345,15 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn static_token_never_expires() {
-        let client = UpstreamClient::with_static_token(
-            "https://example.com".to_string(),
-            "my_token".to_string(),
-            vec![],
-        );
-        let auth = client.auth.blocking_lock();
-        assert_eq!(auth.access_token, "my_token");
-        assert!(auth.expires_at.is_none());
+    fn no_expiry_never_expires() {
+        let auth = make_auth(None);
         assert!(!auth.is_expired());
     }
 
