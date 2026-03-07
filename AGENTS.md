@@ -20,8 +20,8 @@ Single Rust binary with five components:
 
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
-3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Tool-level allowlist filtering and credential isolation. Only starts when `[mcp]` is in config. Auth stored in `~/.kap/auth/` via `kap mcp add`; servers must be listed in kap.toml with `allow_tools`.
-4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Credentials stay on the sidecar; a single `cli-shim.sh` is mounted as each tool name (busybox pattern via `sidecar-cli-shim`). Per-tool allow/deny in `[[cli.tools]]` config.
+3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Tool-level allow/deny filtering and credential isolation. Only starts when `[mcp]` is in config. Auth stored in `~/.kap/auth/` via `kap mcp add`; servers must be listed in kap.toml with `allow`.
+4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Credentials stay on the sidecar; a shim is mounted via Docker Compose configs as each tool name (busybox pattern via `sidecar-cli-shim`). Per-tool allow/deny in `[[cli.tools]]` config.
 5. **Remote access daemon** (:19420): runs on the host (not in Docker). HTTP server with token-based auth for monitoring and steering devcontainers from a phone. QR code pairing, WebSocket streaming, web UI served from the binary. Start with `kap remote start`.
 
 ## Key modules
@@ -40,7 +40,7 @@ Single Rust binary with five components:
 - `src/mcp/upstream.rs`:HTTPS client to upstream MCP servers, token injection + refresh
 - `src/mcp/auth.rs`:`kap mcp add` OAuth flow: metadata discovery, dynamic client registration, PKCE, browser callback
 - `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config
-- `src/init_env.rs`:`kap sidecar-init` (initializeCommand); regenerates compose overlay, writes `.env`, generates `cli-shim.sh`
+- `src/init_env.rs`:`kap sidecar-init` (initializeCommand); regenerates compose overlay and `.env`
 - `src/mcp_cmd.rs`:`kap mcp` subcommands (add, get, list, remove)
 - `src/container.rs`:devcontainer lifecycle (up, down, exec, list)
 - `src/status.rs`:health checks (proxy, DNS, auth mount, log path)
@@ -78,7 +78,7 @@ kap exec kap status                       # verify all checks pass
 kap exec .devcontainer/smoke-test.sh       # run smoke tests
 ```
 
-`--reset` is required whenever `.env`, the overlay template, or `cli-shim.sh` change. Without it, `kap up` reuses the existing container with stale env vars and volume mounts. `--reset` also clears proxy logs.
+`--reset` is required whenever `.env` or the overlay template change. Without it, `kap up` reuses the existing container with stale env vars and volume mounts. `--reset` also clears proxy logs.
 
 ## Compose overlay
 

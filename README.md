@@ -11,6 +11,11 @@ Run AI agents in secure capsules. Built on devcontainers with network controls a
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS/Windows, or Docker Engine on Linux)
+- [devcontainer CLI](https://github.com/devcontainers/cli) — `npm install -g @devcontainers/cli` or `brew install devcontainer` on macOS
+
 ## Quick start
 
 ```bash
@@ -61,7 +66,7 @@ kap mcp list          # see registered servers
 kap mcp get linear    # show details + tools list
 ```
 
-Then add each server to `kap.toml` with an `allow_tools` list:
+Then add each server to `kap.toml` with an `allow`/`deny` list:
 
 ```toml
 [mcp]
@@ -69,15 +74,15 @@ Then add each server to `kap.toml` with an `allow_tools` list:
 # Allow all tools
 [[mcp.servers]]
 name = "context7"
-allow_tools = ["*"]
+allow = ["*"]
 
 # Allow only read/search operations
 [[mcp.servers]]
 name = "github"
-allow_tools = ["get_*", "list_*", "search_*"]
+allow = ["get_*", "list_*", "search_*"]
 ```
 
-Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_user`, etc.).
+`deny` overrides `allow`, same as domain and CLI rules. Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_user`, etc.).
 
 ## CLI proxy
 
