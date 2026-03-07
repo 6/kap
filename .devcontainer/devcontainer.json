@@ -1,6 +1,9 @@
 {
   "name": "kap",
-  "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
+  "dockerComposeFile": [
+    "docker-compose.yml",
+    "docker-compose.kap.yml"
+  ],
   "service": "app",
   "workspaceFolder": "/workspaces/kap",
   "initializeCommand": "kap sidecar-init",

@@ -1,28 +1,15 @@
-# kap.toml — kap configuration for dogfooding
+# kap.toml — network and tool policy for this devcontainer
 
 [proxy.network]
+# Domains the container can reach. Wildcards supported (*.example.com).
+# Everything else is blocked — both HTTP/HTTPS and DNS.
 allow = [
   # GitHub
   "github.com",
   "*.github.com",
   "*.githubusercontent.com",
-  # Rust
-  "crates.io",
-  "*.crates.io",
-  "rustup.rs",
-  "*.rustup.rs",
-  "*.rust-lang.org",
-  # Node / npm
-  "*.npmjs.org",
-  "*.npmjs.com",
-  "registry.npmjs.org",
-  "nodejs.org",
-  "*.yarnpkg.com",
-  "storage.googleapis.com",
-  # APT
-  "*.ubuntu.com",
-  "*.debian.org",
-  # AI
+
+  # AI providers
   "anthropic.com",
   "*.anthropic.com",
   "claude.ai",
@@ -32,38 +19,70 @@ allow = [
   "openai.com",
   "*.openai.com",
   "generativelanguage.googleapis.com",
+  "storage.googleapis.com",
+
+  # APT
+  "*.ubuntu.com",
+  "*.debian.org",
+
+  # Dev tools
+  "mise.jdx.dev",
+
+  # Ruby
+  "rubygems.org",
+  "*.rubygems.org",
+  "bundler.io",
+  "*.ruby-lang.org",
+  "rubyonrails.org",
+  "*.rubyonrails.org",
+
+  # Node
+  "*.npmjs.org",
+  "*.npmjs.com",
+  "nodejs.org",
+  "*.yarnpkg.com",
+
+  # Rust
+  "crates.io",
+  "*.crates.io",
+  "rustup.rs",
+  "*.rustup.rs",
+  "*.rust-lang.org",
+
+  # Python
+  "pypi.org",
+  "*.pypi.org",
+  "*.pythonhosted.org",
+
+  # Go
+  "proxy.golang.org",
+  "sum.golang.org",
+
+  # Java
+  "repo.maven.apache.org",
+  "*.maven.org",
+  "plugins.gradle.org",
+  "services.gradle.org",
+  "downloads.gradle-dn.com",
+
+  # CocoaPods
+  "cocoapods.org",
+  "*.cocoapods.org"
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
 
-[proxy.observe]
-log = "/var/log/kap/proxy.jsonl"
+# --- MCP servers (tool-level filtering for remote MCP) ---
+# Register with `kap mcp add <url>`, then restrict tools:
+# [mcp]
+# [[mcp.servers]]
+# name = "github"
+# allow = ["get_pull_request", "list_issues"]
 
-# Compose overlay: build kap from source (this is the kap project itself)
-[compose]
-build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "proxy" }
-
-# MCP proxy: tool-level filtering + credential isolation
-[mcp]
-
-# Servers registered via `kap mcp add` are auto-discovered from ~/.kap/auth/
-# Add a [[mcp.servers]] entry only to restrict tools:
-
-# Auth comes from ~/.kap/auth/ (via `kap mcp add`)
-# Just list the name + allowed tools here.
-
-[[mcp.servers]]
-name = "context7"
-allow_tools = ["*"]
-
-[[mcp.servers]]
-name = "linear"
-allow_tools = ["get_*", "list_*", "search_*", "save_*"]
-
-# CLI proxy: credentials stay on sidecar, commands are allowlisted
+# --- CLI tool proxying (credentials stay on sidecar, never enter app container) ---
 [cli]
-
 [[cli.tools]]
 name = "gh"
-allow = ["pr *", "issue *", "repo *", "search *", "auth status"]
 env = ["GH_TOKEN"]
+allow = ["*"]
+deny = ["auth token", "auth login", "auth logout", "auth refresh"]
