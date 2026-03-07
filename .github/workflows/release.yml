@@ -52,7 +52,7 @@ jobs:
       - name: Bump version and tag
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml
-          cargo update -p devcontainer-guard
+          cargo update -p kap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
@@ -116,13 +116,13 @@ jobs:
       - name: Package tarball
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../devg-${{ matrix.target }}.tar.gz devg
+          tar czf ../../../kap-${{ matrix.target }}.tar.gz kap
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: devg-${{ matrix.target }}
-          path: devg-${{ matrix.target }}.tar.gz
+          name: kap-${{ matrix.target }}
+          path: kap-${{ matrix.target }}.tar.gz
 
   release:
     needs: [build, prepare]
@@ -135,7 +135,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: devg-*
+          pattern: kap-*
           merge-multiple: true
 
       - name: Create GitHub release
@@ -144,7 +144,7 @@ jobs:
           if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
             FLAGS="$FLAGS --prerelease"
           fi
-          gh release create "${{ needs.prepare.outputs.tag }}" devg-*.tar.gz $FLAGS
+          gh release create "${{ needs.prepare.outputs.tag }}" kap-*.tar.gz $FLAGS
         env:
           GH_TOKEN: ${{ github.token }}
 

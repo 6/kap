@@ -150,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn logger_writes_jsonl_to_file() {
-        let dir = std::env::temp_dir().join(format!("devg-log-write-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-log-write-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
 
@@ -169,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn logger_appends_multiple_entries() {
-        let dir = std::env::temp_dir().join(format!("devg-log-append-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-log-append-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
 
@@ -196,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn logger_creates_parent_dirs() {
-        let dir = std::env::temp_dir().join(format!("devg-log-mkdir-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-log-mkdir-{}", std::process::id()));
         let path = dir.join("sub").join("deep").join("log.jsonl");
         // dir doesn't exist yet
         assert!(!dir.exists());

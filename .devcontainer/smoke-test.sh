@@ -1,10 +1,10 @@
 #!/bin/bash
-# Smoke test for devcontainer-guard enforcement.
+# Smoke test for kap enforcement.
 # Run this from the app container to verify all three layers work.
 #
 # Pre-flight (run on host before starting the devcontainer):
 #   gh auth status          # ensure GitHub CLI is authenticated
-#   devg init-env           # generates .env with GH_TOKEN + API keys
+#   kap init-env           # generates .env with GH_TOKEN + API keys
 set -euo pipefail
 
 PROXY_IP="172.28.0.3"
@@ -16,7 +16,7 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 skip() { echo "  SKIP: $1"; SKIP=$((SKIP + 1)); }
 
-echo "=== devg smoke tests ==="
+echo "=== kap smoke tests ==="
 echo ""
 
 # --- Domain proxy tests ---
@@ -94,7 +94,7 @@ AUTH_CHECK=$(curl -s --max-time 5 --noproxy '*' \
 if echo "$AUTH_CHECK" | grep -q '"tools"'; then
   pass "auth dir mounted (linear server loaded)"
 elif echo "$AUTH_CHECK" | grep -q 'unknown MCP server'; then
-  fail "auth dir not mounted in sidecar (add ~/.devg/auth:/etc/devg/auth to compose volumes)"
+  fail "auth dir not mounted in sidecar (add ~/.kap/auth:/etc/kap/auth to compose volumes)"
 else
   skip "cannot determine auth mount status"
 fi
@@ -118,7 +118,7 @@ elif echo "$MCP_RESP" | grep -q '"error"'; then
   # Server responded but no tools (auth issue, etc.)
   skip "Context7 returned error (CONTEXT7_API_KEY may not be set)"
 elif echo "$MCP_RESP" | grep -q 'unknown MCP server'; then
-  skip "context7 not configured in devg.toml"
+  skip "context7 not configured in kap.toml"
 else
   skip "Context7 not reachable (CONTEXT7_API_KEY may not be set)"
 fi
@@ -128,7 +128,7 @@ echo ""
 echo "--- End-to-end ---"
 
 echo "[10] cargo fetch through proxy"
-if cargo fetch --manifest-path /workspaces/devcontainer-guard/Cargo.toml 2>&1 | tail -1; then
+if cargo fetch --manifest-path /workspaces/kap/Cargo.toml 2>&1 | tail -1; then
   pass "cargo fetch succeeded (DNS + proxy + TLS all working)"
 else
   fail "cargo fetch failed"

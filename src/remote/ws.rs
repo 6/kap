@@ -99,7 +99,7 @@ async fn stream_logs(mut ws: WsStream, project: Option<String>) -> Result<()> {
             "-f",
             "-n",
             "0", // no catch-up — REST handles initial load
-            "/var/log/devg/proxy.jsonl",
+            "/var/log/kap/proxy.jsonl",
         ],
     )
     .await?;

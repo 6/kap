@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::process::Command;
 
-const SANDBOX_NETWORK: &str = "devg_sandbox";
+const SANDBOX_NETWORK: &str = "kap_sandbox";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerGroup {
@@ -12,7 +12,7 @@ pub struct ContainerGroup {
     pub sidecar: String,
 }
 
-/// Find the app and sidecar containers on the devg_sandbox network.
+/// Find the app and sidecar containers on the kap_sandbox network.
 /// Returns the first matching pair (for backward compatibility with status.rs).
 pub fn find_containers() -> Result<(String, String)> {
     let groups = find_all_containers()?;
@@ -22,8 +22,8 @@ pub fn find_containers() -> Result<(String, String)> {
         .map(|g| (g.app, g.sidecar))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no running devcontainer found with devg networking.\n\n  \
-                 Start it with: devg up"
+                "no running devcontainer found with kap networking.\n\n  \
+                 Start it with: kap up"
             )
         })
 }
@@ -99,7 +99,7 @@ fn parse_container_list(text: &str) -> Vec<ContainerGroup> {
 }
 
 fn is_sidecar_name(name: &str) -> bool {
-    name.contains("devg-devg") || name.ends_with("-devg-1")
+    name.contains("kap-kap") || name.ends_with("-kap-1")
 }
 
 /// Run a command in a container and return stdout (trimmed).
@@ -165,21 +165,21 @@ mod tests {
 
     #[test]
     fn parse_single_project() {
-        let input = "myproject-app-1\tmyproject\tmyproject_devg_sandbox\n\
-                      myproject-devg-1\tmyproject\tmyproject_devg_sandbox\n";
+        let input = "myproject-app-1\tmyproject\tmyproject_kap_sandbox\n\
+                      myproject-kap-1\tmyproject\tmyproject_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].project, "myproject");
         assert_eq!(groups[0].app, "myproject-app-1");
-        assert_eq!(groups[0].sidecar, "myproject-devg-1");
+        assert_eq!(groups[0].sidecar, "myproject-kap-1");
     }
 
     #[test]
     fn parse_multiple_projects() {
-        let input = "alpha-app-1\talpha\talpha_devg_sandbox\n\
-                      alpha-devg-1\talpha\talpha_devg_sandbox\n\
-                      beta-app-1\tbeta\tbeta_devg_sandbox\n\
-                      beta-devg-1\tbeta\tbeta_devg_sandbox\n";
+        let input = "alpha-app-1\talpha\talpha_kap_sandbox\n\
+                      alpha-kap-1\talpha\talpha_kap_sandbox\n\
+                      beta-app-1\tbeta\tbeta_kap_sandbox\n\
+                      beta-kap-1\tbeta\tbeta_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].project, "alpha");
@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn parse_ignores_non_sandbox_containers() {
         let input = "web-1\twebproject\tbridge\n\
-                      myproject-app-1\tmyproject\tmyproject_devg_sandbox\n\
-                      myproject-devg-1\tmyproject\tmyproject_devg_sandbox\n";
+                      myproject-app-1\tmyproject\tmyproject_kap_sandbox\n\
+                      myproject-kap-1\tmyproject\tmyproject_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].project, "myproject");
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn parse_ignores_incomplete_groups() {
         // Only has app, no sidecar
-        let input = "myproject-app-1\tmyproject\tmyproject_devg_sandbox\n";
+        let input = "myproject-app-1\tmyproject\tmyproject_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 0);
     }
@@ -213,26 +213,26 @@ mod tests {
     fn parse_malformed_lines() {
         let input = "just-a-name\n\
                       two\tfields\n\
-                      ok-app-1\tok\tok_devg_sandbox\n\
-                      ok-devg-1\tok\tok_devg_sandbox\n";
+                      ok-app-1\tok\tok_kap_sandbox\n\
+                      ok-kap-1\tok\tok_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].project, "ok");
     }
 
     #[test]
-    fn parse_devg_devg_sidecar_pattern() {
-        let input = "proj-app-1\tproj\tproj_devg_sandbox\n\
-                      proj-devg-devg-1\tproj\tproj_devg_sandbox\n";
+    fn parse_kap_kap_sidecar_pattern() {
+        let input = "proj-app-1\tproj\tproj_kap_sandbox\n\
+                      proj-kap-kap-1\tproj\tproj_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].sidecar, "proj-devg-devg-1");
+        assert_eq!(groups[0].sidecar, "proj-kap-kap-1");
     }
 
     #[test]
     fn is_sidecar_name_patterns() {
-        assert!(is_sidecar_name("myproject-devg-1"));
-        assert!(is_sidecar_name("proj-devg-devg-1"));
+        assert!(is_sidecar_name("myproject-kap-1"));
+        assert!(is_sidecar_name("proj-kap-kap-1"));
         assert!(!is_sidecar_name("myproject-app-1"));
         assert!(!is_sidecar_name("myproject-web-1"));
     }
@@ -242,20 +242,20 @@ mod tests {
         let g = ContainerGroup {
             project: "myproj".into(),
             app: "myproj-app-1".into(),
-            sidecar: "myproj-devg-1".into(),
+            sidecar: "myproj-kap-1".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&g).unwrap();
         assert_eq!(json["project"], "myproj");
         assert_eq!(json["app"], "myproj-app-1");
-        assert_eq!(json["sidecar"], "myproj-devg-1");
+        assert_eq!(json["sidecar"], "myproj-kap-1");
     }
 
     #[test]
     fn parse_results_sorted_by_project() {
-        let input = "z-app-1\tz\tz_devg_sandbox\n\
-                      z-devg-1\tz\tz_devg_sandbox\n\
-                      a-app-1\ta\ta_devg_sandbox\n\
-                      a-devg-1\ta\ta_devg_sandbox\n";
+        let input = "z-app-1\tz\tz_kap_sandbox\n\
+                      z-kap-1\tz\tz_kap_sandbox\n\
+                      a-app-1\ta\ta_kap_sandbox\n\
+                      a-kap-1\ta\ta_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups[0].project, "a");
         assert_eq!(groups[1].project, "z");
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn parse_only_sidecar_no_app() {
-        let input = "proj-devg-1\tproj\tproj_devg_sandbox\n";
+        let input = "proj-kap-1\tproj\tproj_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 0);
     }
@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn parse_multiple_networks_containing_sandbox() {
         // Docker can show comma-separated networks
-        let input = "proj-app-1\tproj\tbridge,proj_devg_sandbox\n\
-                      proj-devg-1\tproj\tbridge,proj_devg_sandbox\n";
+        let input = "proj-app-1\tproj\tbridge,proj_kap_sandbox\n\
+                      proj-kap-1\tproj\tbridge,proj_kap_sandbox\n";
         let groups = parse_container_list(input);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].project, "proj");

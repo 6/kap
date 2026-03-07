@@ -129,7 +129,7 @@ async fn handle_status(
         &[
             "sh",
             "-c",
-            "grep -c '\"denied\"' /var/log/devg/proxy.jsonl 2>/dev/null || echo 0",
+            "grep -c '\"denied\"' /var/log/kap/proxy.jsonl 2>/dev/null || echo 0",
         ],
     )
     .and_then(|s| s.trim().parse::<u64>().ok())
@@ -175,7 +175,7 @@ async fn handle_logs(
     };
 
     let raw =
-        containers::exec_in(&sidecar, &["cat", "/var/log/devg/proxy.jsonl"]).unwrap_or_default();
+        containers::exec_in(&sidecar, &["cat", "/var/log/kap/proxy.jsonl"]).unwrap_or_default();
 
     // Return newest first (reverse chronological) — natural for display and pagination
     let entries: Vec<serde_json::Value> = raw
@@ -205,7 +205,7 @@ async fn handle_logs_denied(
     };
 
     let raw =
-        containers::exec_in(&sidecar, &["cat", "/var/log/devg/proxy.jsonl"]).unwrap_or_default();
+        containers::exec_in(&sidecar, &["cat", "/var/log/kap/proxy.jsonl"]).unwrap_or_default();
 
     let entries: Vec<serde_json::Value> = raw
         .lines()
@@ -515,8 +515,8 @@ fn resolve_containers<B>(req: &Request<B>) -> Result<(String, String)> {
             let groups = containers::find_all_containers()?;
             match groups.len() {
                 0 => anyhow::bail!(
-                    "no running devcontainer found with devg networking.\n\n  \
-                     Start it with: devg up"
+                    "no running devcontainer found with kap networking.\n\n  \
+                     Start it with: kap up"
                 ),
                 1 => Ok((groups[0].app.clone(), groups[0].sidecar.clone())),
                 n => anyhow::bail!(

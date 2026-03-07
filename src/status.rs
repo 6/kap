@@ -1,4 +1,4 @@
-/// Check if devcontainer-guard is working.
+/// Check if kap is working.
 ///
 /// Runs on the host. Reads local config, finds the running containers,
 /// and exec's checks into the app container.
@@ -83,7 +83,7 @@ pub fn run() -> Result<()> {
     }
 
     // DNS block test (.invalid is reserved by RFC 2606)
-    match exec_in(&app, &["dig", "+short", "+time=3", "devg-test.invalid"]) {
+    match exec_in(&app, &["dig", "+short", "+time=3", "kap-test.invalid"]) {
         Some(out) if out.is_empty() => ok("DNS blocks unlisted domains", &mut pass),
         None => ok("DNS blocks unlisted domains", &mut pass),
         _ => bad(
@@ -104,7 +104,7 @@ pub fn run() -> Result<()> {
             "%{http_code}",
             "--max-time",
             "5",
-            "https://devg-test.invalid",
+            "https://kap-test.invalid",
         ],
     );
     let code = http_code.as_deref().unwrap_or("").trim();
@@ -136,10 +136,10 @@ pub fn run() -> Result<()> {
                     std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
                 if !auth_path.exists() {
                     let hint = if available.is_empty() {
-                        format!("run `devg mcp add {} <upstream>`", server.name)
+                        format!("run `kap mcp add {} <upstream>`", server.name)
                     } else {
                         format!(
-                            "available: {}. run `devg mcp add {} <upstream>` or check for typos",
+                            "available: {}. run `kap mcp add {} <upstream>` or check for typos",
                             available.join(", "),
                             server.name
                         )
@@ -153,12 +153,12 @@ pub fn run() -> Result<()> {
         }
 
         // Check auth dir is mounted in sidecar
-        let has_auth_mount = exec_exit_code(&sidecar, &["test", "-d", "/etc/devg/auth"]) == 0;
+        let has_auth_mount = exec_exit_code(&sidecar, &["test", "-d", "/etc/kap/auth"]) == 0;
         if has_auth_mount {
             ok("auth dir mounted in sidecar", &mut pass);
         } else {
             bad(
-                "auth dir not mounted (add ~/.devg/auth:/etc/devg/auth to compose volumes)",
+                "auth dir not mounted (add ~/.kap/auth:/etc/kap/auth to compose volumes)",
                 &mut fail,
             );
         }
@@ -173,9 +173,9 @@ pub fn run() -> Result<()> {
             bad("MCP proxy not reachable on :3129", &mut fail);
         }
 
-        // Run `devg check --mcp` inside the sidecar (uses reqwest, handles
+        // Run `kap check --mcp` inside the sidecar (uses reqwest, handles
         // initialize + tools/list with session IDs properly).
-        if let Some(output) = exec_in(&sidecar, &["devg", "check", "--mcp"]) {
+        if let Some(output) = exec_in(&sidecar, &["kap", "check", "--mcp"]) {
             for line in output.lines() {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
                     continue;
@@ -188,7 +188,7 @@ pub fn run() -> Result<()> {
                 }
             }
         } else {
-            bad("devg check --mcp failed in sidecar", &mut fail);
+            bad("kap check --mcp failed in sidecar", &mut fail);
         }
     }
 
@@ -239,7 +239,7 @@ pub fn run() -> Result<()> {
         &[
             "sh",
             "-c",
-            "grep -c '\"denied\"' /var/log/devg/proxy.jsonl 2>/dev/null || echo 0",
+            "grep -c '\"denied\"' /var/log/kap/proxy.jsonl 2>/dev/null || echo 0",
         ],
     )
     .and_then(|s| s.trim().parse::<u64>().ok())
@@ -247,7 +247,7 @@ pub fn run() -> Result<()> {
 
     if denied_count > 0 {
         println!();
-        println!("  {denied_count} denied requests (run `devg why-denied` for details)");
+        println!("  {denied_count} denied requests (run `kap why-denied` for details)");
     }
 
     // Summary
@@ -291,6 +291,6 @@ fn print_config_summary(config: &crate::config::Config) {
 }
 
 fn load_local_config() -> crate::config::Config {
-    let path = ".devcontainer/devg.toml";
+    let path = ".devcontainer/kap.toml";
     crate::config::Config::load(path).unwrap_or_default()
 }

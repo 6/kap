@@ -232,7 +232,7 @@ pub fn list_devices(data_dir: &Path) {
     let devices = auth::load_devices(data_dir);
     if devices.is_empty() {
         println!("No paired devices.");
-        println!("Run `devg remote pair` to get the pairing QR code.");
+        println!("Run `kap remote pair` to get the pairing QR code.");
         return;
     }
     println!("{:<14} {:<20} {:<26}", "ID", "NAME", "PAIRED");

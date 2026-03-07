@@ -1,6 +1,6 @@
 /// Client-side CLI shim. Runs in the app container.
 ///
-/// Sends args to the devg sidecar's CLI proxy over HTTP
+/// Sends args to the kap sidecar's CLI proxy over HTTP
 /// and forwards stdout/stderr/exit_code back to the caller.
 use anyhow::Result;
 use base64::Engine;

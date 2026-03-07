@@ -1,6 +1,6 @@
-/// `devg mcp` subcommands: add, list, remove.
+/// `kap mcp` subcommands: add, list, remove.
 ///
-/// Global MCP server registration. Tokens are stored at ~/.devg/auth/<name>.json
+/// Global MCP server registration. Tokens are stored at ~/.kap/auth/<name>.json
 /// (mode 0600) and shared across all projects via Docker volume mount.
 /// File locks coordinate token refresh across multiple containers.
 use anyhow::{Context, Result};
@@ -14,7 +14,7 @@ fn auth_dir() -> PathBuf {
     PathBuf::from(auth::host_auth_dir())
 }
 
-/// `devg mcp add <name> <upstream>` — run OAuth or store static headers.
+/// `kap mcp add <name> <upstream>` — run OAuth or store static headers.
 pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
@@ -83,8 +83,8 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
     }
 
     eprintln!();
-    eprintln!("Registered {name}. It will be auto-discovered by devg.");
-    eprintln!("To restrict tools, add to .devcontainer/devg.toml:");
+    eprintln!("Registered {name}. It will be auto-discovered by kap.");
+    eprintln!("To restrict tools, add to .devcontainer/kap.toml:");
     eprintln!();
     eprintln!("  [[mcp.servers]]");
     eprintln!("  name = \"{name}\"");
@@ -94,12 +94,12 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
     Ok(())
 }
 
-/// `devg mcp list` — show globally registered MCP servers.
+/// `kap mcp list` — show globally registered MCP servers.
 pub fn list() -> Result<()> {
     let dir = auth_dir();
 
     if !dir.exists() {
-        println!("No MCP servers registered. Run `devg mcp add <name> <upstream>` to add one.");
+        println!("No MCP servers registered. Run `kap mcp add <name> <upstream>` to add one.");
         return Ok(());
     }
 
@@ -118,7 +118,7 @@ pub fn list() -> Result<()> {
         .collect();
 
     if entries.is_empty() {
-        println!("No MCP servers registered. Run `devg mcp add <name> <upstream>` to add one.");
+        println!("No MCP servers registered. Run `kap mcp add <name> <upstream>` to add one.");
         return Ok(());
     }
 
@@ -142,13 +142,13 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-/// `devg mcp get <name>` — show details for a registered MCP server.
+/// `kap mcp get <name>` — show details for a registered MCP server.
 pub async fn get(name: &str) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
 
     if !file_path.exists() {
-        anyhow::bail!("no auth registered for '{name}'. Run `devg mcp add {name} <upstream>`");
+        anyhow::bail!("no auth registered for '{name}'. Run `kap mcp add {name} <upstream>`");
     }
 
     let auth = StoredAuth::load(&file_path)?;
@@ -213,7 +213,7 @@ pub async fn get(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// `devg mcp remove <name>` — delete auth file and lock file.
+/// `kap mcp remove <name>` — delete auth file and lock file.
 pub fn remove(name: &str) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
@@ -275,8 +275,7 @@ mod tests {
     }
 
     fn tempdir(suffix: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("devg-mcp-cmd-{}-{suffix}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-mcp-cmd-{}-{suffix}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

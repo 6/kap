@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>devg</title>
+<title>kap</title>
 <style>
 :root {
   --bg: #1a1a2e; --fg: #c8d6e5; --dim: #576574; --accent: #0abde3;
@@ -174,7 +174,7 @@ body {
 <body>
 
 <div class="header">
-  <h1>devg</h1>
+  <h1>kap</h1>
   <div class="header-right">
     <span id="project-bar"><select id="project-select" onchange="switchProject()"></select></span>
     <button class="icon-btn" onclick="openSettings()" title="Settings">⚙</button>
@@ -225,12 +225,12 @@ body {
 
 <script>
 const BASE = location.origin;
-let TOKEN = localStorage.getItem('devg_token');
+let TOKEN = localStorage.getItem('kap_token');
 let logWs = null;
 let agentWs = null;
 let logFilter = 'all';
 let currentSession = null;
-let selectedProject = localStorage.getItem('devg_project') || null;
+let selectedProject = localStorage.getItem('kap_project') || null;
 
 // --- Auth ---
 async function init() {
@@ -241,7 +241,7 @@ async function init() {
       const res = await apiFetch('/api/pair', { method: 'POST', pairingToken: hash });
       if (res.session_token) {
         TOKEN = res.session_token;
-        localStorage.setItem('devg_token', TOKEN);
+        localStorage.setItem('kap_token', TOKEN);
         history.replaceState(null, '', '/');
       }
     } catch(e) {
@@ -250,7 +250,7 @@ async function init() {
   }
   if (!TOKEN) {
     document.getElementById('v-status').innerHTML =
-      '<div class="empty">No token. Scan the QR code from<br><code>devg remote pair</code></div>';
+      '<div class="empty">No token. Scan the QR code from<br><code>kap remote pair</code></div>';
     return;
   }
   await loadContainers();
@@ -302,7 +302,7 @@ async function loadContainers() {
     if (containers.length === 1) {
       bar.style.display = 'none';
       selectedProject = containers[0].project;
-      localStorage.setItem('devg_project', selectedProject);
+      localStorage.setItem('kap_project', selectedProject);
       return;
     }
     // Multiple projects — show selector
@@ -314,7 +314,7 @@ async function loadContainers() {
     const valid = containers.some(c => c.project === selectedProject);
     if (!valid) selectedProject = containers[0].project;
     sel.value = selectedProject;
-    localStorage.setItem('devg_project', selectedProject);
+    localStorage.setItem('kap_project', selectedProject);
   } catch(e) {
     console.error('loadContainers failed', e);
   }
@@ -323,7 +323,7 @@ async function loadContainers() {
 function switchProject() {
   const sel = document.getElementById('project-select');
   selectedProject = sel.value;
-  localStorage.setItem('devg_project', selectedProject);
+  localStorage.setItem('kap_project', selectedProject);
   // Close any open WebSockets and reload current view
   if (logWs) { logWs.close(); logWs = null; }
   if (agentWs) { agentWs.close(); agentWs = null; }
@@ -526,22 +526,22 @@ function toggleTheme() {
   document.body.classList.toggle('light');
   const isLight = document.body.classList.contains('light');
   document.getElementById('theme-toggle').classList.toggle('on', isLight);
-  localStorage.setItem('devg_theme', isLight ? 'light' : 'dark');
+  localStorage.setItem('kap_theme', isLight ? 'light' : 'dark');
 }
 
 function adjustFont(delta) {
   const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--font-size'));
   const next = Math.max(10, Math.min(20, current + delta));
   document.documentElement.style.setProperty('--font-size', next + 'px');
-  localStorage.setItem('devg_fontsize', next);
+  localStorage.setItem('kap_fontsize', next);
 }
 
 function loadSettings() {
-  if (localStorage.getItem('devg_theme') === 'light') {
+  if (localStorage.getItem('kap_theme') === 'light') {
     document.body.classList.add('light');
     document.getElementById('theme-toggle').classList.add('on');
   }
-  const fs = localStorage.getItem('devg_fontsize');
+  const fs = localStorage.getItem('kap_fontsize');
   if (fs) document.documentElement.style.setProperty('--font-size', fs + 'px');
 }
 

@@ -55,7 +55,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
             })
             .collect();
 
-        // token_env takes priority, then auth file from `devg mcp add`, then headers-only
+        // token_env takes priority, then auth file from `kap mcp add`, then headers-only
         let has_headers = !headers.is_empty();
         let client = if let Some(ref env_var) = server_cfg.token_env {
             let Some(ref upstream) = server_cfg.upstream else {
@@ -116,7 +116,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                     let available = list_auth_files(&config.auth_dir);
                     if available.is_empty() {
                         eprintln!(
-                            "[mcp] skipping {}: no auth registered (run `devg mcp add {} <upstream>`)",
+                            "[mcp] skipping {}: no auth registered (run `kap mcp add {} <upstream>`)",
                             server_cfg.name, server_cfg.name
                         );
                     } else {
@@ -225,7 +225,7 @@ async fn handle_tools_call(
         let resp = jsonrpc::Response::error(
             rpc_req.id.clone(),
             -32602,
-            format!("Tool '{tool_name}' denied by devg MCP filter"),
+            format!("Tool '{tool_name}' denied by kap MCP filter"),
         );
         return Ok(json_response(200, &resp));
     }

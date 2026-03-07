@@ -3,7 +3,7 @@ set -e
 
 # Fix ownership on Docker volumes
 sudo chown -R vscode:vscode /home/vscode/.cargo
-sudo chown -R vscode:vscode /workspaces/devcontainer-guard/target 2>/dev/null || true
+sudo chown -R vscode:vscode /workspaces/kap/target 2>/dev/null || true
 
 # Persistent shell history
 sudo chown vscode:vscode /commandhistory

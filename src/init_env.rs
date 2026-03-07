@@ -1,27 +1,27 @@
-/// Generate .devcontainer/.env and docker-compose.devg.yml from host environment.
+/// Generate .devcontainer/.env and docker-compose.kap.yml from host environment.
 ///
-/// Reads devg.toml to find which env vars the proxy sidecar needs
+/// Reads kap.toml to find which env vars the proxy sidecar needs
 /// (from token_env and ${VAR} references in headers), then writes
 /// them to .env so docker-compose passes them to the container.
 ///
-/// Also regenerates the compose overlay (docker-compose.devg.yml) so it
-/// always matches the installed devg version and devg.toml config.
+/// Also regenerates the compose overlay (docker-compose.kap.yml) so it
+/// always matches the installed kap version and kap.toml config.
 use anyhow::{Context, Result};
 use std::path::Path;
 
 fn generate_shim(tool_name: &str) -> String {
-    format!("#!/bin/sh\nexec /opt/devg/devg cli-shim {tool_name} \"$@\"\n")
+    format!("#!/bin/sh\nexec /opt/kap/kap cli-shim {tool_name} \"$@\"\n")
 }
 
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
-    let config_path = devcontainer_dir.join("devg.toml");
+    let config_path = devcontainer_dir.join("kap.toml");
     let env_path = devcontainer_dir.join(".env");
 
     if !config_path.exists() {
         anyhow::bail!(
-            "No devg.toml found at {}. Run `devg init` first to set up your devcontainer.",
+            "No kap.toml found at {}. Run `kap init` first to set up your devcontainer.",
             config_path.display()
         );
     }
@@ -87,14 +87,14 @@ pub fn run(project_dir: &str) -> Result<()> {
     Ok(())
 }
 
-/// Regenerate docker-compose.devg.yml from devg.toml config.
+/// Regenerate docker-compose.kap.yml from kap.toml config.
 fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()> {
     let overlay_path = devcontainer_dir.join(crate::init::OVERLAY_FILENAME);
 
     // Read service name from devcontainer.json
     let service_name = crate::init::read_service_name(devcontainer_dir)?;
 
-    // Read compose config from devg.toml
+    // Read compose config from kap.toml
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
     let config: crate::config::Config =
@@ -195,7 +195,7 @@ fn load_env_file(
     (values, patterns)
 }
 
-/// Parse devg.toml and collect all env var names referenced by MCP server configs.
+/// Parse kap.toml and collect all env var names referenced by MCP server configs.
 fn vars_from_config(path: &Path) -> Result<Vec<String>> {
     let content =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn load_env_file_parses_key_value() {
-        let dir = std::env::temp_dir().join(format!("devg-loadenv-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-loadenv-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".env");
         std::fs::write(&path, "FOO=bar\nBAZ=qux\n").unwrap();
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn load_env_file_skips_comments_and_blanks() {
-        let dir = std::env::temp_dir().join(format!("devg-loadenv2-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-loadenv2-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".env");
         std::fs::write(&path, "# comment\n\nKEY=val\n  \n# another\n").unwrap();
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn load_env_file_extracts_shell_patterns() {
-        let dir = std::env::temp_dir().join(format!("devg-loadenv3-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-loadenv3-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".env");
         std::fs::write(&path, "# GH_TOKEN=$(gh auth token)\nGH_TOKEN=old_value\n").unwrap();
@@ -337,7 +337,7 @@ mod tests {
         // 1. .env has GH_TOKEN=$(echo hello)
         // 2. First load: evaluates to "hello", writes # GH_TOKEN=$(echo hello)\nGH_TOKEN=hello
         // 3. Second load: finds pattern in comment, re-evaluates, keeps pattern
-        let dir = std::env::temp_dir().join(format!("devg-pattern-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-pattern-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".env");
 
@@ -386,9 +386,9 @@ mod tests {
 
     #[test]
     fn vars_from_config_reads_toml() {
-        let dir = std::env::temp_dir().join(format!("devg-initenv-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-initenv-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("devg.toml");
+        let path = dir.join("kap.toml");
         std::fs::write(
             &path,
             r#"
@@ -414,13 +414,13 @@ headers = { "X-Key" = "${B_API_KEY}", "X-Other" = "${C_SECRET}" }
 
     #[test]
     fn regenerate_overlay_from_config() {
-        let dir = std::env::temp_dir().join(format!("devg-regen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-regen-{}", std::process::id()));
         let dc = dir.join(".devcontainer");
         std::fs::create_dir_all(&dc).unwrap();
 
         std::fs::write(dc.join("devcontainer.json"), r#"{"service": "myapp"}"#).unwrap();
         std::fs::write(
-            dc.join("devg.toml"),
+            dc.join("kap.toml"),
             r#"
 [proxy.network]
 allow = ["github.com"]
@@ -431,7 +431,7 @@ build = { context = "..", dockerfile = "Dockerfile", target = "proxy" }
         )
         .unwrap();
 
-        regenerate_overlay(&dc, &dc.join("devg.toml")).unwrap();
+        regenerate_overlay(&dc, &dc.join("kap.toml")).unwrap();
 
         let overlay = std::fs::read_to_string(dc.join(crate::init::OVERLAY_FILENAME)).unwrap();
         assert!(overlay.contains("myapp:"));
@@ -444,13 +444,13 @@ build = { context = "..", dockerfile = "Dockerfile", target = "proxy" }
 
     #[test]
     fn regenerate_overlay_default_image() {
-        let dir = std::env::temp_dir().join(format!("devg-regen-img-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-regen-img-{}", std::process::id()));
         let dc = dir.join(".devcontainer");
         std::fs::create_dir_all(&dc).unwrap();
 
         std::fs::write(dc.join("devcontainer.json"), r#"{}"#).unwrap();
         std::fs::write(
-            dc.join("devg.toml"),
+            dc.join("kap.toml"),
             r#"
 [proxy.network]
 allow = ["github.com"]
@@ -458,11 +458,11 @@ allow = ["github.com"]
         )
         .unwrap();
 
-        regenerate_overlay(&dc, &dc.join("devg.toml")).unwrap();
+        regenerate_overlay(&dc, &dc.join("kap.toml")).unwrap();
 
         let overlay = std::fs::read_to_string(dc.join(crate::init::OVERLAY_FILENAME)).unwrap();
         assert!(overlay.contains("app:"));
-        assert!(overlay.contains("image: ghcr.io/6/devcontainer-guard:latest"));
+        assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

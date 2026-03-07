@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "devg",
+    name = "kap",
     version,
     about = "Network and MCP access control for devcontainers"
 )]
@@ -34,7 +34,7 @@ enum Command {
         observe: bool,
 
         /// Path to config file
-        #[arg(short, long, default_value = "/etc/devg/config.toml")]
+        #[arg(short, long, default_value = "/etc/kap/config.toml")]
         config: String,
     },
     /// Scaffold devcontainer files into a project
@@ -55,7 +55,7 @@ enum Command {
     },
     /// Stop and remove the devcontainer
     Down {
-        /// Project name (from `devg list`). Default: current directory.
+        /// Project name (from `kap list`). Default: current directory.
         project: Option<String>,
 
         /// Also remove named volumes
@@ -64,7 +64,7 @@ enum Command {
     },
     /// Run a command in the devcontainer (default: interactive shell)
     Exec {
-        /// Project name (from `devg list`). Omit to use current directory.
+        /// Project name (from `kap list`). Omit to use current directory.
         #[arg(short, long)]
         project: Option<String>,
 
@@ -89,7 +89,7 @@ enum Command {
         mcp: bool,
 
         /// Path to config file (for --mcp)
-        #[arg(short, long, default_value = "/etc/devg/config.toml")]
+        #[arg(short, long, default_value = "/etc/kap/config.toml")]
         config: String,
     },
     /// Show denied requests from the proxy log
@@ -99,10 +99,10 @@ enum Command {
         tail: bool,
 
         /// Path to the proxy log
-        #[arg(long, default_value = "/var/log/devg/proxy.jsonl")]
+        #[arg(long, default_value = "/var/log/kap/proxy.jsonl")]
         log: String,
     },
-    /// Forward a CLI command to the devg sidecar proxy (used by shim scripts)
+    /// Forward a CLI command to the kap sidecar proxy (used by shim scripts)
     #[command(hide = true)]
     CliShim {
         /// Tool name (e.g. "gh", "gt")
@@ -118,7 +118,7 @@ enum Command {
         #[arg(short, long, default_value = ".")]
         project_dir: String,
     },
-    /// Check if devcontainer-guard is working (runs checks via docker exec)
+    /// Check if kap is working (runs checks via docker exec)
     Status,
     /// Manage MCP server registrations
     Mcp {
@@ -168,7 +168,7 @@ enum RemoteCommand {
 #[derive(Subcommand)]
 enum McpCommand {
     /// Register an MCP server (OAuth 2.1 or static headers)
-    #[command(override_usage = "devg mcp add <NAME> <UPSTREAM> [--header KEY=VALUE ...]")]
+    #[command(override_usage = "kap mcp add <NAME> <UPSTREAM> [--header KEY=VALUE ...]")]
     Add {
         /// Name for this MCP server (e.g. "linear", "github")
         name: String,
@@ -269,15 +269,15 @@ async fn main() -> anyhow::Result<()> {
                 let names = String::from_utf8_lossy(&ps.stdout);
                 let sidecar = names
                     .lines()
-                    .find(|n| n.contains("devg-devg") || n.ends_with("-devg-1"))
+                    .find(|n| n.contains("kap-kap") || n.ends_with("-kap-1"))
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "no running devg sidecar found.\n\n  \
-                         Start it with: devg up"
+                            "no running kap sidecar found.\n\n  \
+                         Start it with: kap up"
                         )
                     })?;
                 cmd.arg(sidecar);
-                cmd.args(["devg", "why-denied"]);
+                cmd.args(["kap", "why-denied"]);
                 if tail {
                     cmd.arg("--tail");
                 }

@@ -1,9 +1,9 @@
 {
-  "name": "devcontainer-guard",
-  "dockerComposeFile": ["docker-compose.yml", "docker-compose.devg.yml"],
+  "name": "kap",
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
   "service": "app",
-  "workspaceFolder": "/workspaces/devcontainer-guard",
-  "initializeCommand": "devg init-env",
+  "workspaceFolder": "/workspaces/kap",
+  "initializeCommand": "kap init-env",
   "postCreateCommand": ".devcontainer/setup.sh",
   "remoteUser": "vscode"
 }

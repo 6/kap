@@ -1,5 +1,5 @@
-# Base compose: just the dev environment for working on devg itself.
-# The devg proxy sidecar is in docker-compose.devg.yml (overlay).
+# Base compose: just the dev environment for working on kap itself.
+# The kap proxy sidecar is in docker-compose.kap.yml (overlay).
 services:
   app:
     build:
@@ -7,11 +7,11 @@ services:
       dockerfile: .devcontainer/Dockerfile
       target: dev
     volumes:
-      - ..:/workspaces/devcontainer-guard:cached
+      - ..:/workspaces/kap:cached
       - history:/commandhistory
       - cargo-cache:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
-      - target-cache:/workspaces/devcontainer-guard/target
+      - target-cache:/workspaces/kap/target
       # 1Password SSH agent (macOS). On Linux, use $SSH_AUTH_SOCK instead.
       - ${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock:/ssh-agent:ro
     environment:

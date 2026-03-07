@@ -164,10 +164,10 @@ fn upstream_from_auth_file(auth_dir: &str, name: &str) -> Option<String> {
         .and_then(|v| v["upstream"].as_str().map(String::from))
 }
 
-const DEFAULT_IMAGE: &str = "ghcr.io/6/devcontainer-guard:latest";
+const DEFAULT_IMAGE: &str = "ghcr.io/6/kap:latest";
 
 impl ComposeConfig {
-    /// Render the YAML for the devg service's image or build section.
+    /// Render the YAML for the kap service's image or build section.
     pub fn image_yaml(&self, indent: &str) -> String {
         if let Some(ref build) = self.build {
             let mut lines = vec![format!("{indent}build:")];
@@ -212,7 +212,7 @@ fn default_mcp_listen() -> String {
 }
 
 fn default_mcp_auth_dir() -> String {
-    "/etc/devg/auth".to_string()
+    "/etc/kap/auth".to_string()
 }
 
 fn default_cli_listen() -> String {
@@ -220,7 +220,7 @@ fn default_cli_listen() -> String {
 }
 
 fn default_observe_log() -> String {
-    "/var/log/devg/proxy.jsonl".to_string()
+    "/var/log/kap/proxy.jsonl".to_string()
 }
 
 #[cfg(test)]
@@ -393,7 +393,7 @@ name = "linear"
 
     #[test]
     fn load_nonexistent_file_returns_default() {
-        let config = Config::load("/nonexistent/path/devg.toml").unwrap();
+        let config = Config::load("/nonexistent/path/kap.toml").unwrap();
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
         assert!(config.mcp.is_none());
     }
@@ -408,11 +408,11 @@ name = "linear"
     fn parse_compose_image() {
         let toml = r#"
 [compose]
-image = "myregistry/devg:v1"
+image = "myregistry/kap:v1"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         let compose = config.compose.unwrap();
-        assert_eq!(compose.image.as_deref(), Some("myregistry/devg:v1"));
+        assert_eq!(compose.image.as_deref(), Some("myregistry/kap:v1"));
         assert!(compose.build.is_none());
     }
 

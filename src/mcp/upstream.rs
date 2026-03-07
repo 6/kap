@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn stored_auth_load_from_file() {
-        let dir = std::env::temp_dir().join(format!("devg-auth-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-auth-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.json");
 
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn load_invalid_json_errors() {
-        let dir = std::env::temp_dir().join(format!("devg-auth-invalid-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-auth-invalid-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bad.json");
         std::fs::write(&path, "not json").unwrap();
@@ -406,7 +406,7 @@ mod tests {
                 .unwrap();
         });
 
-        let dir = std::env::temp_dir().join(format!("devg-refresh-persist-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-refresh-persist-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let auth_path = dir.join("test.json");
 
@@ -450,7 +450,7 @@ mod tests {
     async fn reread_after_lock_skips_refresh_if_file_already_fresh() {
         // Simulates the case where another container refreshed while we waited for the lock.
         // The client has an expired in-memory token, but the file has a fresh one.
-        let dir = std::env::temp_dir().join(format!("devg-reread-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-reread-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let auth_path = dir.join("test.json");
 
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn lock_file_created_during_refresh() {
         // Verify that a .lock file is created alongside the auth file
-        let dir = std::env::temp_dir().join(format!("devg-lockfile-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-lockfile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let auth_path = dir.join("test.json");
         let lock_path = auth_path.with_extension("lock");

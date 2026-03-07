@@ -1,12 +1,12 @@
-# Build devg binary (shared by both targets)
+# Build kap binary (shared by both targets)
 FROM rust:1.93-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY static/ static/
-RUN cargo build --release && cp target/release/devg /usr/local/bin/devg
+RUN cargo build --release && cp target/release/kap /usr/local/bin/kap
 
-# Proxy sidecar: devg binary + gh CLI.
+# Proxy sidecar: kap binary + gh CLI.
 # Runs domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129), CLI proxy (:3130).
 FROM debian:bookworm-slim AS proxy
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,11 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/bin/devg /usr/local/bin/devg
-RUN mkdir -p /var/log/devg
-CMD ["devg", "proxy"]
+COPY --from=builder /usr/local/bin/kap /usr/local/bin/kap
+RUN mkdir -p /var/log/kap
+CMD ["kap", "proxy"]
 
-# Dev environment: full Rust toolchain for working on devg itself.
+# Dev environment: full Rust toolchain for working on kap itself.
 # This is the app container in the dogfood devcontainer.
 FROM ubuntu:24.04 AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq ripgrep fd-find locales openssh-client \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/bin/devg /usr/local/bin/devg
+COPY --from=builder /usr/local/bin/kap /usr/local/bin/kap
 # Create vscode user (matches devcontainer convention)
 RUN userdel -r ubuntu 2>/dev/null; \
     groupadd -f -g 1000 vscode \
@@ -53,7 +53,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/vscode/.local/bin:/home/vscode/.claude/bin:${PATH}"
 
 # Shell config (prompt, mise activation, aliases, onboarding)
-RUN echo 'PS1="%F{cyan}devg%f %F{blue}%~%f %# "' > ~/.zshrc \
+RUN echo 'PS1="%F{cyan}kap%f %F{blue}%~%f %# "' > ~/.zshrc \
     && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc \
     && echo 'alias ccd="claude --dangerously-skip-permissions"' >> ~/.zshrc \
     && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json \

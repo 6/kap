@@ -211,7 +211,7 @@ async fn register_client(
     };
 
     let body = serde_json::json!({
-        "client_name": "devg",
+        "client_name": "kap",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -341,13 +341,13 @@ struct TokenResponse {
 
 fn default_auth_dir() -> String {
     if let Some(home) = std::env::var_os("HOME") {
-        format!("{}/.devg/auth", home.to_string_lossy())
+        format!("{}/.kap/auth", home.to_string_lossy())
     } else {
-        ".devg/auth".to_string()
+        ".kap/auth".to_string()
     }
 }
 
-/// Get the default auth directory for the host (used by `devg auth`).
+/// Get the default auth directory for the host (used by `kap auth`).
 pub fn host_auth_dir() -> String {
     default_auth_dir()
 }

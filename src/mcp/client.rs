@@ -1,7 +1,7 @@
 /// Shared MCP client for initialize → tools/list handshake.
 ///
-/// Used by `devg check --mcp` (through the proxy, no auth) and
-/// `devg mcp add`/`devg mcp get` (direct to upstream, with auth).
+/// Used by `kap check --mcp` (through the proxy, no auth) and
+/// `kap mcp add`/`kap mcp get` (direct to upstream, with auth).
 use anyhow::{Context, Result};
 
 /// Auth to send with MCP requests.
@@ -32,7 +32,7 @@ pub async fn fetch_tools(url: &str, auth: &McpAuth<'_>) -> Result<Vec<serde_json
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "devg", "version": "1.0"}
+            "clientInfo": {"name": "kap", "version": "1.0"}
         }
     });
     let mut req = http

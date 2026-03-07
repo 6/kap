@@ -1,7 +1,7 @@
 /// Wrapper commands for devcontainer lifecycle: up, down, exec, list.
 ///
 /// Shells out to `devcontainer` CLI and `docker compose` so users
-/// only need one tool (`devg`) for everything.
+/// only need one tool (`kap`) for everything.
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -33,7 +33,7 @@ pub fn up(reset: bool) -> Result<()> {
     println!();
     if let Err(e) = crate::status::run() {
         eprintln!("  status check failed: {e}");
-        eprintln!("  (the container is running — try `devg status` again in a moment)");
+        eprintln!("  (the container is running — try `kap status` again in a moment)");
     }
 
     Ok(())
@@ -120,7 +120,7 @@ pub fn list(stats: bool) -> Result<()> {
         }
         println!("\x1b[1m{}\x1b[0m", g.project);
         print_container_line("  app", &g.app, &resource_stats);
-        print_container_line("  devg", &g.sidecar, &resource_stats);
+        print_container_line("  kap", &g.sidecar, &resource_stats);
     }
     Ok(())
 }
@@ -191,7 +191,7 @@ fn resolve_project(project: Option<String>) -> Result<String> {
                 1 => Ok(matches[0].project.clone()),
                 0 => anyhow::bail!(
                     "no running devcontainer matching '{name}'.\n\n  \
-                     Run `devg list` to see running containers."
+                     Run `kap list` to see running containers."
                 ),
                 _ => {
                     let names: Vec<_> = matches.iter().map(|g| g.project.as_str()).collect();
@@ -265,7 +265,7 @@ fn workspace_folder() -> Result<PathBuf> {
     if !dc_json.exists() {
         anyhow::bail!(
             "no .devcontainer/devcontainer.json in current directory.\n\n  \
-             Run `devg init` first, or cd into your project."
+             Run `kap init` first, or cd into your project."
         );
     }
     Ok(cwd)
@@ -311,8 +311,8 @@ mod tests {
 
     #[test]
     fn derive_compose_project_hyphenated() {
-        let p = derive_compose_project(Path::new("/Users/peter/oss/devcontainer-guard"));
-        assert_eq!(p.as_deref(), Some("devcontainer-guard_devcontainer"));
+        let p = derive_compose_project(Path::new("/Users/peter/oss/kap"));
+        assert_eq!(p.as_deref(), Some("kap_devcontainer"));
     }
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn workspace_folder_requires_devcontainer_json() {
-        let dir = std::env::temp_dir().join(format!("devg-ws-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-ws-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let original = std::env::current_dir().unwrap();

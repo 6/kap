@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// Default directory for remote access data.
 pub fn data_dir() -> PathBuf {
-    dirs_home().join(".devg").join("remote")
+    dirs_home().join(".kap").join("remote")
 }
 
 fn dirs_home() -> PathBuf {
@@ -230,7 +230,7 @@ pub fn print_qr(data: &str) {
         row += 2;
     }
     println!();
-    println!("  Scan with the devg app to pair");
+    println!("  Scan with the kap app to pair");
     println!("  {data}");
     println!();
 }
@@ -249,7 +249,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "devg-auth-{name}-{}-{:?}",
+            "kap-auth-{name}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

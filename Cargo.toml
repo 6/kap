@@ -1,12 +1,12 @@
 [package]
-name = "devcontainer-guard"
+name = "kap"
 version = "0.0.1-pre2"
 edition = "2024"
-description = "Network and MCP access control for devcontainers"
+description = "Secure capsule for AI coding agents"
 license = "MIT"
 
 [[bin]]
-name = "devg"
+name = "kap"
 path = "src/main.rs"
 
 [dependencies]
