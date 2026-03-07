@@ -9,9 +9,11 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-fn generate_shim(tool_name: &str) -> String {
-    format!("#!/bin/sh\nexec /opt/kap/kap cli-shim {tool_name} \"$@\"\n")
-}
+/// Generic CLI shim: uses argv[0] to determine the tool name, then forwards
+/// to the kap binary which detects the invocation name (busybox pattern).
+/// One file is mounted at /usr/local/bin/<tool> for each configured tool.
+const CLI_SHIM: &str =
+    "#!/bin/sh\nexec /opt/kap/kap sidecar-cli-shim \"$(basename \"$0\")\" \"$@\"\n";
 
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
@@ -134,18 +136,17 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         crate::init::OVERLAY_FILENAME
     );
 
-    // Write shim scripts for each CLI tool
-    for tool_name in &cli_tools {
-        let shim_path = devcontainer_dir.join(format!("{tool_name}-shim.sh"));
-        let shim = generate_shim(tool_name);
-        std::fs::write(&shim_path, shim)
+    // Write single generic CLI shim (mounted as each tool name in the overlay)
+    if !cli_tools.is_empty() {
+        let shim_path = devcontainer_dir.join("cli-shim.sh");
+        std::fs::write(&shim_path, CLI_SHIM)
             .with_context(|| format!("writing {}", shim_path.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))?;
         }
-        eprintln!("[sidecar-init] wrote {tool_name}-shim.sh");
+        eprintln!("[sidecar-init] wrote cli-shim.sh");
     }
 
     Ok(())

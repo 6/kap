@@ -119,7 +119,7 @@ enum Command {
     },
     /// Forward a CLI command to the kap sidecar proxy (used by shim scripts)
     #[command(hide = true)]
-    CliShim {
+    SidecarCliShim {
         /// Tool name (e.g. "gh", "gt")
         tool: String,
 
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
                 check::run(proxy).await
             }
         }
-        Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
+        Command::SidecarCliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::Down { project, volumes } => container::down(project, volumes),
         Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::Init { project_dir, yes } => init::run(&project_dir, yes),

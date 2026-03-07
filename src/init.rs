@@ -92,11 +92,13 @@ pub fn generate_overlay(
     let cli_volumes = if cli_tools.is_empty() {
         String::new()
     } else {
+        // The kap binary detects argv[0] and acts as a CLI shim when invoked as
+        // e.g. "gh" (busybox pattern). A single generic shim script is mounted at
+        // /usr/local/bin/<tool> for each tool — no per-tool files needed.
         let mut mounts: Vec<String> = cli_tools
             .iter()
-            .map(|name| format!("      - ./{name}-shim.sh:/usr/local/bin/{name}:ro"))
+            .map(|name| format!("      - ./cli-shim.sh:/usr/local/bin/{name}:ro"))
             .collect();
-        // Mount kap binary from sidecar via shared volume
         mounts.push("      - kap-bin:/opt/kap:ro".to_string());
         format!("\n    volumes:\n{}", mounts.join("\n"))
     };
@@ -178,6 +180,7 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     let entries = [
         format!(".devcontainer/{OVERLAY_FILENAME}"),
         ".devcontainer/.env".to_string(),
+        ".devcontainer/cli-shim.sh".to_string(),
     ];
 
     let existing = if gitignore_path.exists() {
