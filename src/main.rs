@@ -208,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "no running devg sidecar found.\n\n  \
-                         Start it with: devcontainer up --workspace-folder ."
+                         Start it with: devcontainer up"
                         )
                     })?;
                 cmd.arg(sidecar);

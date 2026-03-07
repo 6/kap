@@ -325,7 +325,7 @@ fn find_containers() -> Result<(String, String)> {
         (Some(a), Some(s)) => Ok((a, s)),
         _ => anyhow::bail!(
             "no running devcontainer found with devg networking.\n\n  \
-             Start it with: devcontainer up --workspace-folder ."
+             Start it with: devcontainer up"
         ),
     }
 }

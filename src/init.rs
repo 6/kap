@@ -224,7 +224,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path) -> Result<()> {
 
     println!();
     println!("Next:");
-    println!("  devcontainer up --workspace-folder .");
+    println!("  devcontainer up");
     println!("  devg status   # verify everything is wired correctly");
 
     Ok(())
@@ -271,7 +271,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     println!();
     println!("Next steps:");
     println!("  1. Review devg.toml and adjust allowed domains");
-    println!("  2. Run: devcontainer up --workspace-folder .");
+    println!("  2. Run: devcontainer up");
 
     Ok(())
 }

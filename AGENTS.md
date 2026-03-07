@@ -49,7 +49,7 @@ After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint w
 
 Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all layers (domain proxy, DNS forwarder, MCP proxy, CLI proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
 
-**Do NOT use `docker compose up` directly** to manage devcontainers. Always use `devcontainer up --workspace-folder .` (and `--remove-existing-container` to force recreation). The devcontainer CLI adds labels that `devcontainer exec` needs to find containers. Manual `docker compose up` strips these labels and breaks `devcontainer exec`.
+**Do NOT use `docker compose up` directly** to manage devcontainers. Always use `devcontainer up` (and `--remove-existing-container` to force recreation). The devcontainer CLI adds labels that `devcontainer exec` needs to find containers. Manual `docker compose up` strips these labels and breaks `devcontainer exec`.
 
 ## Testing changes end-to-end
 
@@ -57,9 +57,9 @@ After any code change that affects the proxy, overlay, or shims:
 
 ```bash
 mise run build                                                  # build + install to ~/.cargo/bin
-devcontainer up --workspace-folder . --remove-existing-container  # full recreate
-devcontainer exec --workspace-folder . devg status               # verify all checks pass
-devcontainer exec --workspace-folder . .devcontainer/smoke-test.sh  # run smoke tests
+devcontainer up --remove-existing-container  # full recreate
+devcontainer exec devg status               # verify all checks pass
+devcontainer exec .devcontainer/smoke-test.sh  # run smoke tests
 ```
 
 `--remove-existing-container` is required whenever `.env`, the overlay template, or shim scripts change. Without it, `devcontainer up` reuses the existing container with stale env vars and volume mounts.
