@@ -100,11 +100,9 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     // Read service name from devcontainer.json
     let service_name = crate::init::read_service_name(devcontainer_dir)?;
 
-    // Read compose config from kap.toml
-    let content = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config: crate::config::Config =
-        toml::from_str(&content).with_context(|| format!("parsing {}", config_path.display()))?;
+    // Read config from kap.toml (merged with global ~/.kap/kap.toml if present,
+    // so global CLI tools get shim mounts in the overlay)
+    let config = crate::config::Config::load(&config_path.to_string_lossy())?;
     let compose_config = config.compose.unwrap_or_default();
     let cli_tools: Vec<String> = config
         .cli
@@ -121,6 +119,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     } else {
         None
     };
+    let global_config = crate::config::has_global_config();
     let overlay = crate::init::generate_overlay(
         &service_name,
         &compose_config,
@@ -128,6 +127,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         &subnet_prefix,
         &project_name,
         ssh_auth_sock.as_deref(),
+        global_config,
     );
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;

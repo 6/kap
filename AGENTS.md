@@ -27,7 +27,7 @@ Single Rust binary with five components:
 ## Key modules
 
 - `src/main.rs`:clap CLI dispatch
-- `src/config.rs`:TOML config parsing (domain lists, MCP server configs, `ssh_agent`, `[compose]` section)
+- `src/config.rs`:TOML config parsing (domain lists, MCP server configs, `ssh_agent`, `[compose]` section). Merges global `~/.kap/kap.toml` with project config on load.
 - `src/proxy/mod.rs`:HTTP/HTTPS forward proxy (hyper + tokio)
 - `src/proxy/dns.rs`:DNS forwarder with domain filtering (prevents DNS exfiltration, not redundant with HTTP proxy)
 - `src/proxy/allowlist.rs`:wildcard domain matching, deny-overrides-allow (shared by HTTP proxy, DNS, and MCP proxy)

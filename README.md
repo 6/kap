@@ -54,6 +54,22 @@ deny = ["gist.github.com"]
 
 Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win.
 
+## Global config
+
+`~/.kap/kap.toml` applies to all projects. Same format as the project config — domains, CLI tools, and MCP servers are merged automatically. Project settings override global settings for same-name tools/servers.
+
+```toml
+# ~/.kap/kap.toml
+[proxy.network]
+allow = ["*.internal.corp.com", "artifactory.corp.com"]
+
+[cli]
+[[cli.tools]]
+name = "aws"
+env = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+allow = ["s3 *", "sts get-caller-identity"]
+```
+
 ## MCP proxy
 
 The MCP proxy sits between the agent and remote MCP servers, injecting credentials when forwarding upstream. The app container never sees tokens or API keys.

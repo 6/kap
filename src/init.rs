@@ -88,6 +88,7 @@ pub fn generate_overlay(
     subnet_prefix: &str,
     project_name: &str,
     ssh_auth_sock: Option<&str>,
+    global_config: bool,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
     // CLI tool proxying: inline the shim script via Docker Compose configs so we
@@ -133,6 +134,11 @@ pub fn generate_overlay(
     } else {
         ""
     };
+    let global_config_volume = if global_config {
+        "\n      - ${{HOME}}/.kap/kap.toml:/etc/kap/global.toml:ro"
+    } else {
+        ""
+    };
     let app_ip = format!("{subnet_prefix}.2");
     let sidecar_ip = format!("{subnet_prefix}.3");
     let subnet = format!("{subnet_prefix}.0/24");
@@ -167,7 +173,7 @@ pub fn generate_overlay(
   kap:
 {image_yaml}
     volumes:
-      - ./kap.toml:/etc/kap/config.toml:ro
+      - ./kap.toml:/etc/kap/config.toml:ro{global_config_volume}
       - ${{HOME}}/.kap/auth:/etc/kap/auth
       - proxy-logs:/var/log/kap
       - kap-bin:/opt/kap
@@ -358,6 +364,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     let subnet_prefix = derive_subnet(project);
     let project_name = read_project_name(devcontainer_dir);
     let ssh_auth_sock = detect_ssh_auth_sock();
+    let global_config = crate::config::has_global_config();
     write_file(
         &overlay_path,
         &generate_overlay(
@@ -367,6 +374,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
             &subnet_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
+            global_config,
         ),
     )?;
 
@@ -458,6 +466,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let detected = detect_cli_tools();
     let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
     let ssh_auth_sock = detect_ssh_auth_sock();
+    let global_config = crate::config::has_global_config();
     write_file(
         &devcontainer_dir.join(OVERLAY_FILENAME),
         &generate_overlay(
@@ -467,6 +476,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
             &subnet_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
+            global_config,
         ),
     )?;
 
@@ -707,6 +717,7 @@ allow = [
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
+# Global defaults from ~/.kap/kap.toml are merged automatically.
 
 # --- MCP servers (tool-level filtering for remote MCP) ---
 # Register with `kap mcp add <url>`, then restrict tools:
@@ -1036,7 +1047,15 @@ mod tests {
                 target: Some("proxy".to_string()),
             }),
         };
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &[],
+            "172.28.0",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("build:"));
         assert!(overlay.contains("context: .."));
         assert!(overlay.contains("dockerfile: .devcontainer/Dockerfile"));
@@ -1047,7 +1066,15 @@ mod tests {
     #[test]
     fn overlay_with_default_image() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &[],
+            "172.28.0",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
         assert!(!overlay.contains("build:"));
     }
@@ -1055,7 +1082,15 @@ mod tests {
     #[test]
     fn overlay_includes_proxy_logs_volume() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test-project", None);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &[],
+            "172.28.0",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("proxy-logs:/var/log/kap"));
         assert!(overlay.contains("volumes:\n  proxy-logs:"));
     }
@@ -1127,7 +1162,15 @@ mod tests {
     #[test]
     fn overlay_uses_custom_subnet() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.25.42", "test-project", None);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            &[],
+            "172.25.42",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("172.25.42.2")); // app IP
         assert!(overlay.contains("172.25.42.3")); // sidecar IP
         assert!(overlay.contains("172.25.42.0/24")); // subnet
@@ -1207,7 +1250,7 @@ mod tests {
     fn overlay_inlines_cli_shim_via_configs() {
         let compose = ComposeConfig::default();
         let tools = vec!["gh".to_string(), "aws".to_string()];
-        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None);
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None, false);
         // Shim is inlined via Docker Compose configs, not a separate file
         assert!(overlay.contains("configs:\n  cli-shim:\n    content:"));
         assert!(overlay.contains("target: /usr/local/bin/gh"));
@@ -1221,7 +1264,7 @@ mod tests {
     #[test]
     fn overlay_contains_hostname() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project", None);
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "my-project", None, false);
         assert!(overlay.contains("hostname: my-project"));
     }
 
@@ -1235,6 +1278,7 @@ mod tests {
             "172.28.0",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
+            false,
         );
         assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
@@ -1243,7 +1287,7 @@ mod tests {
     #[test]
     fn overlay_omits_ssh_agent_when_unset() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None);
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None, false);
         assert!(!overlay.contains("ssh-agent"));
         assert!(!overlay.contains("SSH_AUTH_SOCK"));
     }
@@ -1259,10 +1303,25 @@ mod tests {
             "172.28.0",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
+            false,
         );
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
         assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
+    }
+
+    #[test]
+    fn overlay_includes_global_config_mount() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None, true);
+        assert!(overlay.contains("/.kap/kap.toml:/etc/kap/global.toml:ro"));
+    }
+
+    #[test]
+    fn overlay_omits_global_config_when_disabled() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None, false);
+        assert!(!overlay.contains("global.toml"));
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {

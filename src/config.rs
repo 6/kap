@@ -79,8 +79,31 @@ pub struct ObserveConfig {
     pub log: String,
 }
 
+/// Well-known paths for the global config file.
+/// Checked in order; the first that exists wins.
+const GLOBAL_CONFIG_PATHS: &[&str] = &[
+    "/etc/kap/global.toml", // inside sidecar container (mounted from host)
+];
+
+/// Return the host-side global config path: ~/.kap/kap.toml
+fn home_global_config() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{h}/.kap/kap.toml"))
+}
+
 impl Config {
+    /// Load project config and merge with global config (~/.kap/kap.toml).
     pub fn load(path: &str) -> Result<Self> {
+        let mut config = Self::load_file(path)?;
+        if let Some(global) = Self::find_global() {
+            config.merge_global(global);
+        }
+        Ok(config)
+    }
+
+    /// Load a single config file without global merge.
+    pub(crate) fn load_file(path: &str) -> Result<Self> {
         let path = Path::new(path);
         if path.exists() {
             let content = std::fs::read_to_string(path)
@@ -88,6 +111,64 @@ impl Config {
             toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))
         } else {
             Ok(Self::default())
+        }
+    }
+
+    /// Try well-known global config paths, return the first that exists.
+    fn find_global() -> Option<Self> {
+        let candidates: Vec<String> = GLOBAL_CONFIG_PATHS
+            .iter()
+            .map(|s| s.to_string())
+            .chain(home_global_config())
+            .collect();
+        for path in &candidates {
+            if Path::new(path).exists()
+                && let Ok(cfg) = Self::load_file(path)
+            {
+                return Some(cfg);
+            }
+        }
+        None
+    }
+
+    /// Merge global config into self.
+    /// Vec fields are unioned; for named items (CLI tools, MCP servers),
+    /// project entries override global entries with the same name.
+    fn merge_global(&mut self, global: Config) {
+        // Domains: prepend global, project domains come after
+        let mut allow = global.proxy.network.allow;
+        allow.append(&mut self.proxy.network.allow);
+        self.proxy.network.allow = allow;
+
+        let mut deny = global.proxy.network.deny;
+        deny.append(&mut self.proxy.network.deny);
+        self.proxy.network.deny = deny;
+
+        // CLI tools: add global tools not overridden by project
+        if let Some(global_cli) = global.cli {
+            let project_cli = self.cli.get_or_insert_with(|| CliConfig {
+                listen: default_cli_listen(),
+                tools: Vec::new(),
+            });
+            for gtool in global_cli.tools {
+                if !project_cli.tools.iter().any(|t| t.name == gtool.name) {
+                    project_cli.tools.push(gtool);
+                }
+            }
+        }
+
+        // MCP servers: add global servers not overridden by project
+        if let Some(global_mcp) = global.mcp {
+            let project_mcp = self.mcp.get_or_insert_with(|| McpConfig {
+                listen: default_mcp_listen(),
+                auth_dir: default_mcp_auth_dir(),
+                servers: Vec::new(),
+            });
+            for gserver in global_mcp.servers {
+                if !project_mcp.servers.iter().any(|s| s.name == gserver.name) {
+                    project_mcp.servers.push(gserver);
+                }
+            }
         }
     }
 
@@ -221,6 +302,13 @@ fn default_cli_listen() -> String {
 
 fn default_observe_log() -> String {
     "/var/log/kap/proxy.jsonl".to_string()
+}
+
+/// Check whether a global config file exists at ~/.kap/kap.toml.
+pub fn has_global_config() -> bool {
+    home_global_config()
+        .map(|p| Path::new(&p).exists())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -365,7 +453,7 @@ headers = { "X-Api-Key" = "${API_KEY}", "Accept" = "application/json" }
 
     #[test]
     fn load_nonexistent_file_returns_default() {
-        let config = Config::load("/nonexistent/path/kap.toml").unwrap();
+        let config = Config::load_file("/nonexistent/path/kap.toml").unwrap();
         assert_eq!(config.proxy.listen, "0.0.0.0:3128");
         assert!(config.mcp.is_none());
     }
@@ -461,5 +549,171 @@ env = ["GH_TOKEN"]
         assert_eq!(cli.tools[0].deny, vec!["auth *", "api"]);
         assert_eq!(cli.tools[0].env, vec!["GH_TOKEN"]);
         assert_eq!(cli.tools[1].name, "gt");
+    }
+
+    #[test]
+    fn merge_global_allow_domains() {
+        let mut project: Config = toml::from_str(
+            r#"
+[proxy.network]
+allow = ["project.com"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[proxy.network]
+allow = ["global.com", "*.corp.com"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        assert_eq!(
+            project.proxy.network.allow,
+            vec!["global.com", "*.corp.com", "project.com"]
+        );
+    }
+
+    #[test]
+    fn merge_global_deny_domains() {
+        let mut project: Config = toml::from_str(
+            r#"
+[proxy.network]
+deny = ["bad-project.com"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[proxy.network]
+deny = ["bad-global.com"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        assert_eq!(
+            project.proxy.network.deny,
+            vec!["bad-global.com", "bad-project.com"]
+        );
+    }
+
+    #[test]
+    fn merge_global_cli_tools_additive() {
+        let mut project: Config = toml::from_str(
+            r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+allow = ["pr *"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[cli]
+[[cli.tools]]
+name = "aws"
+allow = ["s3 *"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        let tools = &project.cli.unwrap().tools;
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "gh");
+        assert_eq!(tools[1].name, "aws");
+    }
+
+    #[test]
+    fn merge_global_cli_tools_dedup() {
+        let mut project: Config = toml::from_str(
+            r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+allow = ["pr *"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+allow = ["issue *"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        let tools = &project.cli.unwrap().tools;
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "gh");
+        assert_eq!(tools[0].allow, vec!["pr *"]); // project wins
+    }
+
+    #[test]
+    fn merge_global_mcp_servers_dedup() {
+        let mut project: Config = toml::from_str(
+            r#"
+[mcp]
+[[mcp.servers]]
+name = "github"
+allow = ["get_*"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[mcp]
+[[mcp.servers]]
+name = "github"
+allow = ["*"]
+
+[[mcp.servers]]
+name = "linear"
+allow = ["*"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        let servers = &project.mcp.unwrap().servers;
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].name, "github");
+        assert_eq!(servers[0].allow, vec!["get_*"]); // project wins
+        assert_eq!(servers[1].name, "linear"); // global-only, added
+    }
+
+    #[test]
+    fn merge_global_no_cli_in_project() {
+        let mut project: Config = toml::from_str("").unwrap();
+        assert!(project.cli.is_none());
+        let global: Config = toml::from_str(
+            r#"
+[cli]
+[[cli.tools]]
+name = "aws"
+allow = ["s3 *"]
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        let tools = &project.cli.unwrap().tools;
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "aws");
+    }
+
+    #[test]
+    fn merge_global_empty_is_noop() {
+        let mut project: Config = toml::from_str(
+            r#"
+[proxy.network]
+allow = ["project.com"]
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str("").unwrap();
+        project.merge_global(global);
+        assert_eq!(project.proxy.network.allow, vec!["project.com"]);
+        assert!(project.cli.is_none());
     }
 }
