@@ -209,9 +209,9 @@ networks:
 ///
 /// On macOS, uses Docker Desktop's built-in SSH agent forwarding
 /// (`/run/host-services/ssh-auth.sock`) which avoids VM socket-sharing
-/// issues with bind-mounted host sockets. Requires the 1Password
-/// LaunchAgent or equivalent to set SSH_AUTH_SOCK globally so Docker
-/// Desktop picks it up.
+/// issues with bind-mounted host sockets. The host SSH agent must be
+/// visible to Docker Desktop (e.g. via a LaunchAgent that sets
+/// SSH_AUTH_SOCK globally).
 ///
 /// On Linux, Docker runs natively so we bind-mount $SSH_AUTH_SOCK directly.
 pub fn detect_ssh_auth_sock() -> Option<String> {
