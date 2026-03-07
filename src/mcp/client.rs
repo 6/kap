@@ -1,6 +1,6 @@
 /// Shared MCP client for initialize → tools/list handshake.
 ///
-/// Used by `kap check --mcp` (through the proxy, no auth) and
+/// Used by `kap sidecar-check --mcp` (through the proxy, no auth) and
 /// `kap mcp add`/`kap mcp get` (direct to upstream, with auth).
 use anyhow::{Context, Result};
 

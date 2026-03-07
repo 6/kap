@@ -1,6 +1,6 @@
 # kap
 
-Network and MCP access control for devcontainers. Binary name: `kap`.
+Secure capsule for AI coding agents, built on devcontainers.
 
 ## Commands
 
@@ -13,7 +13,7 @@ cargo run -- --help  # CLI help
 
 ## Architecture
 
-Single Rust binary with four enforcement layers plus a host-side remote access daemon:
+Single Rust binary with five components:
 
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
@@ -34,9 +34,12 @@ Single Rust binary with four enforcement layers plus a host-side remote access d
 - `src/mcp/client.rs`:shared MCP client (initialize + tools/list handshake)
 - `src/mcp/jsonrpc.rs`:JSON-RPC 2.0 types, tools/list filtering, tools/call gating
 - `src/mcp/upstream.rs`:HTTPS client to upstream MCP servers, token injection + refresh
-- `src/mcp/auth.rs`:`kap auth` command: OAuth 2.1 (metadata discovery, dynamic client registration, PKCE, browser callback)
+- `src/mcp/auth.rs`:`kap mcp add` OAuth flow: metadata discovery, dynamic client registration, PKCE, browser callback
 - `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config
 - `src/init_env.rs`:runs as `initializeCommand`; regenerates compose overlay, writes `.env`, generates gh shim
+- `src/mcp_cmd.rs`:`kap mcp` subcommands (add, get, list, remove)
+- `src/container.rs`:devcontainer lifecycle (up, down, exec, list)
+- `src/status.rs`:health checks (proxy, DNS, auth mount, log path)
 - `src/cli/mod.rs`:CLI proxy HTTP listener, process spawning, multi-tool routing
 - `src/cli/filter.rs`:command allow/deny filtering (generic, per-tool)
 - `src/cli/shim.rs`:client-side shim (runs in app container, forwards to sidecar)

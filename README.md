@@ -3,7 +3,7 @@
 > [!WARNING]
 > This is experimental and may have bugs. Use at your own risk.
 
-Secure capsule for AI coding agents, built on devcontainers. `kap` runs as a sidecar that isolates your agent from the network and controls what it can reach:
+Secure capsule for AI coding agents, built on devcontainers. `kap` is a devcontainer sidecar that gates all outbound access from your agent:
 
 - **Domain allowlist** - only approved domains are reachable from the container
 - **MCP tool allowlist** - only approved tools are callable on remote MCP servers

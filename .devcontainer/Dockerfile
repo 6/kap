@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/kap /usr/local/bin/kap
 RUN mkdir -p /var/log/kap
-CMD ["kap", "proxy"]
+CMD ["kap", "sidecar-proxy"]
 
 # Dev environment: full Rust toolchain for working on kap itself.
 # This is the app container in the dogfood devcontainer.

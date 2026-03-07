@@ -173,9 +173,9 @@ pub fn run() -> Result<()> {
             bad("MCP proxy not reachable on :3129", &mut fail);
         }
 
-        // Run `kap check --mcp` inside the sidecar (uses reqwest, handles
+        // Run `kap sidecar-check --mcp` inside the sidecar (uses reqwest, handles
         // initialize + tools/list with session IDs properly).
-        if let Some(output) = exec_in(&sidecar, &["kap", "check", "--mcp"]) {
+        if let Some(output) = exec_in(&sidecar, &["kap", "sidecar-check", "--mcp"]) {
             for line in output.lines() {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
                     continue;
@@ -188,7 +188,7 @@ pub fn run() -> Result<()> {
                 }
             }
         } else {
-            bad("kap check --mcp failed in sidecar", &mut fail);
+            bad("kap sidecar-check --mcp failed in sidecar", &mut fail);
         }
     }
 

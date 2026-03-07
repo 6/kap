@@ -119,7 +119,7 @@ services:
       - proxy-logs:/var/log/kap
       - kap-bin:/opt/kap
       - ..:/workspace:ro
-    entrypoint: ["sh", "-c", "cp /usr/local/bin/kap /opt/kap/kap && exec kap proxy"]
+    entrypoint: ["sh", "-c", "cp /usr/local/bin/kap /opt/kap/kap && exec kap sidecar-proxy"]
     env_file:
       - path: .env
         required: false
@@ -129,7 +129,7 @@ services:
       kap_external:
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "kap", "check", "--proxy"]
+      test: ["CMD", "kap", "sidecar-check", "--proxy"]
       interval: 2s
       timeout: 2s
       retries: 10

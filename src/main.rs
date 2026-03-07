@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "kap",
     version,
-    about = "Network and MCP access control for devcontainers"
+    about = "Secure capsule for AI coding agents"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,31 +27,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the forward proxy with domain allowlist
-    Proxy {
-        /// Run in observe mode: allow all traffic, log every domain
+    /// Check proxy health (runs inside the sidecar)
+    #[command(hide = true)]
+    SidecarCheck {
+        /// Only check proxy health (for container healthcheck)
         #[arg(long)]
-        observe: bool,
+        proxy: bool,
 
-        /// Path to config file
+        /// Check MCP servers (initialize + tools/list). Output: JSON lines.
+        #[arg(long)]
+        mcp: bool,
+
+        /// Path to config file (for --mcp)
         #[arg(short, long, default_value = "/etc/kap/config.toml")]
         config: String,
     },
-    /// Scaffold devcontainer files into a project
-    Init {
-        /// Project directory
-        #[arg(short, long, default_value = ".")]
-        project_dir: String,
+    /// Forward a CLI command to the kap sidecar proxy (used by shim scripts)
+    #[command(hide = true)]
+    CliShim {
+        /// Tool name (e.g. "gh", "gt")
+        tool: String,
 
-        /// Skip confirmation prompts
-        #[arg(short, long)]
-        yes: bool,
-    },
-    /// Start the devcontainer
-    Up {
-        /// Remove and recreate the container from scratch
-        #[arg(long)]
-        reset: bool,
+        /// Arguments to pass to the tool
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Stop and remove the devcontainer
     Down {
@@ -72,25 +71,56 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
+    /// Scaffold devcontainer files into a project
+    Init {
+        /// Project directory
+        #[arg(short, long, default_value = ".")]
+        project_dir: String,
+
+        /// Skip confirmation prompts
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Generate .devcontainer/.env with host credentials (for initializeCommand)
+    InitEnv {
+        /// Project directory containing .devcontainer/
+        #[arg(short, long, default_value = ".")]
+        project_dir: String,
+    },
     /// List running devcontainers
     List {
         /// Show CPU and memory usage
         #[arg(short, long)]
         stats: bool,
     },
-    /// Check proxy health (for container healthcheck)
-    Check {
-        /// Only check proxy health (for container healthcheck)
+    /// Manage MCP server registrations
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Start the forward proxy (runs inside the sidecar)
+    #[command(hide = true)]
+    SidecarProxy {
+        /// Run in observe mode: allow all traffic, log every domain
         #[arg(long)]
-        proxy: bool,
+        observe: bool,
 
-        /// Check MCP servers (initialize + tools/list). Output: JSON lines.
-        #[arg(long)]
-        mcp: bool,
-
-        /// Path to config file (for --mcp)
+        /// Path to config file
         #[arg(short, long, default_value = "/etc/kap/config.toml")]
         config: String,
+    },
+    /// Remote access for monitoring and steering from your phone
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+    /// Check if kap is working (runs checks via docker exec)
+    Status,
+    /// Start the devcontainer
+    Up {
+        /// Remove and recreate the container from scratch
+        #[arg(long)]
+        reset: bool,
     },
     /// Show denied requests from the proxy log
     WhyDenied {
@@ -101,48 +131,6 @@ enum Command {
         /// Path to the proxy log
         #[arg(long, default_value = "/var/log/kap/proxy.jsonl")]
         log: String,
-    },
-    /// Forward a CLI command to the kap sidecar proxy (used by shim scripts)
-    #[command(hide = true)]
-    CliShim {
-        /// Tool name (e.g. "gh", "gt")
-        tool: String,
-
-        /// Arguments to pass to the tool
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-    /// Generate .devcontainer/.env with host credentials (for initializeCommand)
-    InitEnv {
-        /// Project directory containing .devcontainer/
-        #[arg(short, long, default_value = ".")]
-        project_dir: String,
-    },
-    /// Check if kap is working (runs checks via docker exec)
-    Status,
-    /// Manage MCP server registrations
-    Mcp {
-        #[command(subcommand)]
-        command: McpCommand,
-    },
-    /// Authenticate with a remote MCP server (hidden alias for `mcp add`)
-    #[command(hide = true)]
-    Auth {
-        /// Name for this MCP server
-        name: String,
-
-        /// Upstream MCP server URL
-        #[arg(long)]
-        upstream: String,
-
-        /// Directory to store auth tokens
-        #[arg(long)]
-        auth_dir: Option<String>,
-    },
-    /// Remote access for monitoring and steering from iPhone
-    Remote {
-        #[command(subcommand)]
-        command: RemoteCommand,
     },
 }
 
@@ -203,7 +191,31 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Proxy { observe, config } => {
+        Command::SidecarCheck { proxy, mcp, config } => {
+            if mcp {
+                check::run_mcp(&config).await
+            } else {
+                check::run(proxy).await
+            }
+        }
+        Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
+        Command::Down { project, volumes } => container::down(project, volumes),
+        Command::Exec { project, cmd } => container::exec(project, cmd),
+        Command::Init { project_dir, yes } => init::run(&project_dir, yes),
+        Command::InitEnv { project_dir } => init_env::run(&project_dir),
+        Command::List { stats } => container::list(stats),
+        Command::Mcp { command } => match command {
+            McpCommand::Add {
+                name,
+                upstream,
+                reauth,
+                headers,
+            } => mcp_cmd::add(&name, &upstream, reauth, &headers).await,
+            McpCommand::List => mcp_cmd::list(),
+            McpCommand::Get { name } => mcp_cmd::get(&name).await,
+            McpCommand::Remove { name } => mcp_cmd::remove(&name),
+        },
+        Command::SidecarProxy { observe, config } => {
             let cfg = config::Config::load(&config)?;
 
             let mcp_domains = cfg.mcp_upstream_domains();
@@ -239,21 +251,20 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Init { project_dir, yes } => init::run(&project_dir, yes),
-        Command::Up { reset } => container::up(reset),
-        Command::Down { project, volumes } => container::down(project, volumes),
-        Command::Exec { project, cmd } => container::exec(project, cmd),
-        Command::List { stats } => container::list(stats),
-        Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
-        Command::InitEnv { project_dir } => init_env::run(&project_dir),
-        Command::Status => status::run(),
-        Command::Check { proxy, mcp, config } => {
-            if mcp {
-                check::run_mcp(&config).await
-            } else {
-                check::run(proxy).await
+        Command::Remote { command } => {
+            let data_dir = remote::auth::data_dir();
+            match command {
+                RemoteCommand::Start { listen } => remote::start(&listen, data_dir).await,
+                RemoteCommand::Stop => remote::stop(),
+                RemoteCommand::Devices => {
+                    remote::list_devices(&data_dir);
+                    Ok(())
+                }
+                RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
             }
         }
+        Command::Status => status::run(),
+        Command::Up { reset } => container::up(reset),
         Command::WhyDenied { tail, log } => {
             if std::path::Path::new(&log).exists() {
                 // Running inside the container
@@ -283,40 +294,6 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let status = cmd.status()?;
                 std::process::exit(status.code().unwrap_or(1));
-            }
-        }
-        Command::Mcp { command } => match command {
-            McpCommand::Add {
-                name,
-                upstream,
-                reauth,
-                headers,
-            } => mcp_cmd::add(&name, &upstream, reauth, &headers).await,
-            McpCommand::List => mcp_cmd::list(),
-            McpCommand::Get { name } => mcp_cmd::get(&name).await,
-            McpCommand::Remove { name } => mcp_cmd::remove(&name),
-        },
-        Command::Auth {
-            name,
-            upstream,
-            auth_dir,
-        } => {
-            let dir = auth_dir.unwrap_or_else(mcp::auth::host_auth_dir);
-            let stored = mcp::auth::run(&name, &upstream).await?;
-            mcp::auth::write_auth_file(&name, &stored, &dir)?;
-            eprintln!("[auth] tokens saved to {dir}/{name}.json");
-            Ok(())
-        }
-        Command::Remote { command } => {
-            let data_dir = remote::auth::data_dir();
-            match command {
-                RemoteCommand::Start { listen } => remote::start(&listen, data_dir).await,
-                RemoteCommand::Stop => remote::stop(),
-                RemoteCommand::Devices => {
-                    remote::list_devices(&data_dir);
-                    Ok(())
-                }
-                RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
             }
         }
     }
