@@ -184,6 +184,13 @@ pub fn parse_session_events(jsonl: &str) -> Vec<SessionEvent> {
 
 /// Extract a human-readable summary from the event.
 fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String> {
+    // System and queue events don't need a message field
+    match event_type {
+        "system" => return Some("system event".to_string()),
+        "queue-operation" => return None,
+        _ => {}
+    }
+
     let msg = msg?;
 
     match event_type {
@@ -251,11 +258,6 @@ fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String>
                 _ => None,
             }
         }
-        "system" => {
-            // System events (hooks, etc.)
-            Some("system event".to_string())
-        }
-        "queue-operation" => None,
         _ => None,
     }
 }
@@ -406,5 +408,70 @@ mod tests {
         let jsonl = r#"{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"text","text":"hi"}]},"timestamp":"2026-03-07T10:00:00Z","uuid":"1"}"#;
         let events = parse_session_events(jsonl);
         assert_eq!(events[0].model.as_deref(), Some("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn empty_jsonl_returns_empty() {
+        let events = parse_session_events("");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn invalid_json_lines_skipped() {
+        let jsonl = "not json\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"},\"uuid\":\"1\",\"timestamp\":\"t\"}\nalso not json\n";
+        let events = parse_session_events(jsonl);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].summary.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn system_event_parsed() {
+        let jsonl = r#"{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-03-07T10:00:00Z","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "system");
+        assert_eq!(events[0].summary.as_deref(), Some("system event"));
+    }
+
+    #[test]
+    fn queue_operation_has_no_summary() {
+        let jsonl = r#"{"type":"queue-operation","operation":"enqueue","content":"do something","timestamp":"2026-03-07T10:00:00Z"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "queue-operation");
+        assert!(events[0].summary.is_none());
+    }
+
+    #[test]
+    fn tool_result_user_message_included() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"uuid":"1","timestamp":"t"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].role.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn session_event_serialization_skips_none_fields() {
+        let event = SessionEvent {
+            event_type: "user".to_string(),
+            role: Some("user".to_string()),
+            timestamp: None,
+            summary: Some("hello".to_string()),
+            model: None,
+            tool_name: None,
+            uuid: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("timestamp").is_none());
+        assert!(v.get("model").is_none());
+        assert!(v.get("tool_name").is_none());
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["summary"], "hello");
+    }
+
+    #[test]
+    fn extract_project_name_no_projects_dir() {
+        assert_eq!(extract_project_name("/some/random/path.jsonl"), "unknown");
     }
 }

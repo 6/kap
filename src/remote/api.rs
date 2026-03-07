@@ -380,4 +380,82 @@ mod tests {
         assert_eq!(parse_query_param("limit=50", "missing"), None);
         assert_eq!(parse_query_param("", "limit"), None);
     }
+
+    #[test]
+    fn parse_query_param_non_numeric() {
+        assert_eq!(parse_query_param("limit=abc", "limit"), None);
+        assert_eq!(parse_query_param("limit=-1", "limit"), None);
+    }
+
+    #[test]
+    fn json_response_sets_content_type() {
+        let resp = json_response(StatusCode::OK, &ErrorBody { error: "test" });
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Content-Type").unwrap(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn json_response_serializes_body() {
+        use http_body_util::BodyExt;
+
+        let resp = json_response(StatusCode::NOT_FOUND, &ErrorBody { error: "nope" });
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = resp.into_body();
+        let collected = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(body.collect())
+            .unwrap();
+        let bytes = collected.to_bytes();
+        let raw = String::from_utf8_lossy(&bytes);
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["error"], "nope");
+    }
+
+    #[test]
+    fn json_response_owned_error() {
+        let resp = json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &ErrorBodyOwned {
+                error: "something broke".to_string(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn cancel_response_serializes() {
+        let resp = CancelResponse {
+            cancelled: true,
+            message: "done",
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["cancelled"], true);
+        assert_eq!(v["message"], "done");
+    }
+
+    #[test]
+    fn diff_response_serializes() {
+        let resp = DiffResponse {
+            diff: "+added line\n-removed line".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["diff"].as_str().unwrap().contains("+added"));
+    }
+
+    #[test]
+    fn pair_response_serializes() {
+        let resp = PairResponse {
+            session_token: "tok123".to_string(),
+            device_id: "dev456".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["session_token"], "tok123");
+        assert_eq!(v["device_id"], "dev456");
+    }
 }

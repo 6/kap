@@ -220,21 +220,65 @@ pub fn revoke(data_dir: &Path, device_id: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn extract_bearer(req: &Request<Full<Bytes>>) -> Option<String> {
+        req.headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(String::from)
+    }
+
     #[test]
     fn extract_bearer_works() {
         let req = Request::builder()
             .header("Authorization", "Bearer my-token-123")
             .body(Full::new(Bytes::new()))
             .unwrap();
-        // Can't use extract_bearer_token directly due to body type mismatch,
-        // so test the logic manually:
-        let header = req
-            .headers()
-            .get("authorization")
-            .unwrap()
-            .to_str()
+        assert_eq!(extract_bearer(&req).as_deref(), Some("my-token-123"));
+    }
+
+    #[test]
+    fn extract_bearer_missing_header() {
+        let req = Request::builder().body(Full::new(Bytes::new())).unwrap();
+        assert!(extract_bearer(&req).is_none());
+    }
+
+    #[test]
+    fn extract_bearer_wrong_scheme() {
+        let req = Request::builder()
+            .header("Authorization", "Basic abc123")
+            .body(Full::new(Bytes::new()))
             .unwrap();
-        let token = header.strip_prefix("Bearer ").unwrap();
-        assert_eq!(token, "my-token-123");
+        assert!(extract_bearer(&req).is_none());
+    }
+
+    #[test]
+    fn extract_bearer_empty_token() {
+        let req = Request::builder()
+            .header("Authorization", "Bearer ")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        assert_eq!(extract_bearer(&req).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn build_tls_config_from_generated_cert() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = std::env::temp_dir().join(format!("devg-tls-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (cert_pem, key_pem, _fp) = auth::load_or_generate_tls(&dir).unwrap();
+        let config = build_tls_config(&cert_pem, &key_pem);
+        assert!(config.is_ok());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_tls_config_bad_pem_fails() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let result = build_tls_config("not a cert", "not a key");
+        assert!(result.is_err());
     }
 }
