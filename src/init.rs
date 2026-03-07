@@ -10,12 +10,12 @@ use std::path::Path;
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.kap.yml";
 
-pub fn run(project_dir: &str, yes: bool) -> Result<()> {
+pub fn run(project_dir: &str, yes: bool, force: bool) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
 
     if devcontainer_dir.exists() {
-        run_existing(project, &devcontainer_dir, yes)
+        run_existing(project, &devcontainer_dir, yes, force)
     } else {
         run_new(project, &devcontainer_dir)
     }
@@ -89,18 +89,29 @@ pub fn generate_overlay(
     project_name: &str,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
-    let cli_volumes = if cli_tools.is_empty() {
-        String::new()
+    // CLI tool proxying: inline the shim script via Docker Compose configs so we
+    // don't need a separate cli-shim.sh file on disk. One config is mounted at
+    // /usr/local/bin/<tool> for each tool (busybox pattern via basename "$0").
+    let (cli_configs_top, cli_configs_svc, cli_volumes) = if cli_tools.is_empty() {
+        (String::new(), String::new(), String::new())
     } else {
-        // The kap binary detects argv[0] and acts as a CLI shim when invoked as
-        // e.g. "gh" (busybox pattern). A single generic shim script is mounted at
-        // /usr/local/bin/<tool> for each tool — no per-tool files needed.
-        let mut mounts: Vec<String> = cli_tools
+        let top = r#"configs:
+  cli-shim:
+    content: |
+      #!/bin/sh
+      exec /opt/kap/kap sidecar-cli-shim "$(basename "$0")" "$@"
+
+"#
+        .to_string();
+        let svc: Vec<String> = cli_tools
             .iter()
-            .map(|name| format!("      - ./cli-shim.sh:/usr/local/bin/{name}:ro"))
+            .map(|name| {
+                format!("      - source: cli-shim\n        target: /usr/local/bin/{name}\n        mode: 0755")
+            })
             .collect();
-        mounts.push("      - kap-bin:/opt/kap:ro".to_string());
-        format!("\n    volumes:\n{}", mounts.join("\n"))
+        let svc_block = format!("\n    configs:\n{}", svc.join("\n"));
+        let vol_block = "\n    volumes:\n      - kap-bin:/opt/kap:ro".to_string();
+        (top, svc_block, vol_block)
     };
     let app_ip = format!("{subnet_prefix}.2");
     let sidecar_ip = format!("{subnet_prefix}.3");
@@ -110,7 +121,7 @@ pub fn generate_overlay(
 # Adds network isolation, DNS filtering, and MCP proxy.
 # Merged with your existing docker-compose via dockerComposeFile array in devcontainer.json.
 # This file MUST be last in the array so its settings take precedence.
-services:
+{cli_configs_top}services:
   # Adds proxy env vars and DNS to your existing service
   {service_name}:
     hostname: {project_name}
@@ -127,7 +138,7 @@ services:
       - {sidecar_ip}
     networks:
       kap_sandbox:
-        ipv4_address: {app_ip}{cli_volumes}
+        ipv4_address: {app_ip}{cli_configs_svc}{cli_volumes}
     depends_on:
       kap:
         condition: service_healthy
@@ -180,7 +191,6 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     let entries = [
         format!(".devcontainer/{OVERLAY_FILENAME}"),
         ".devcontainer/.env".to_string(),
-        ".devcontainer/cli-shim.sh".to_string(),
     ];
 
     let existing = if gitignore_path.exists() {
@@ -213,7 +223,7 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
 }
 
 /// Existing project: create config, generate overlay, update devcontainer.json.
-fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
+fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool) -> Result<()> {
     let devcontainer_json_path = devcontainer_dir.join("devcontainer.json");
     if !devcontainer_json_path.exists() {
         anyhow::bail!(
@@ -223,9 +233,9 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()
     }
 
     let kap_toml_path = devcontainer_dir.join("kap.toml");
-    if kap_toml_path.exists() {
+    if kap_toml_path.exists() && !force {
         anyhow::bail!(
-            "kap.toml already exists at {}. Remove it to re-initialize.",
+            "kap.toml already exists at {}. Use --force to overwrite.",
             kap_toml_path.display()
         );
     }
@@ -332,10 +342,14 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()
         .iter()
         .map(|f| serde_json::Value::String(f.clone()))
         .collect();
-    all_compose.push(serde_json::Value::String(OVERLAY_FILENAME.to_string()));
+    if !compose_files.iter().any(|f| f == OVERLAY_FILENAME) {
+        all_compose.push(serde_json::Value::String(OVERLAY_FILENAME.to_string()));
+    }
     dc_obj["dockerComposeFile"] = serde_json::Value::Array(all_compose);
     dc_obj["service"] = serde_json::Value::String(service_name);
-    dc_obj["workspaceFolder"] = serde_json::Value::String("/workspace".to_string());
+    if dc_obj.get("workspaceFolder").is_none() {
+        dc_obj["workspaceFolder"] = serde_json::Value::String("/workspace".to_string());
+    }
 
     let mut notes: Vec<String> = Vec::new();
 
@@ -521,6 +535,7 @@ struct DetectedTool {
     name: &'static str,
     env: &'static [&'static str],
     allow: &'static [&'static str],
+    deny: &'static [&'static str],
     /// Default shell expressions for env vars (written to .env during init).
     env_defaults: &'static [(&'static str, &'static str)],
 }
@@ -529,6 +544,7 @@ const DETECTABLE_TOOLS: &[DetectedTool] = &[DetectedTool {
     name: "gh",
     env: &["GH_TOKEN"],
     allow: &["*"],
+    deny: &["auth token", "auth login", "auth logout", "auth refresh"],
     env_defaults: &[("GH_TOKEN", "$(gh auth token)")],
 }];
 
@@ -584,6 +600,7 @@ fn generate_config() -> String {
 # name = "gh"
 # env = ["GH_TOKEN"]
 # allow = ["*"]
+# deny = ["auth token", "auth login", "auth logout", "auth refresh"]
 "#
         .to_string()
     } else {
@@ -602,8 +619,19 @@ fn generate_config() -> String {
                     .map(|a| format!("\"{a}\""))
                     .collect::<Vec<_>>()
                     .join(", ");
+                let deny_line = if t.deny.is_empty() {
+                    String::new()
+                } else {
+                    let deny = t
+                        .deny
+                        .iter()
+                        .map(|d| format!("\"{d}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("\ndeny = [{deny}]")
+                };
                 format!(
-                    "\n[[cli.tools]]\nname = \"{}\"\nenv = [{}]\nallow = [{}]",
+                    "\n[[cli.tools]]\nname = \"{}\"\nenv = [{}]\nallow = [{}]{deny_line}",
                     t.name, env, allow
                 )
             })
@@ -724,7 +752,7 @@ mod tests {
     #[test]
     fn new_project_scaffolds_all_files() {
         let dir = tempdir("scaffold-new");
-        run(dir.to_str().unwrap(), true).unwrap();
+        run(dir.to_str().unwrap(), true, false).unwrap();
         let dc = dir.join(".devcontainer");
         assert!(dc.join("kap.toml").exists());
         assert!(dc.join("docker-compose.yml").exists());
@@ -774,7 +802,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap(), true).unwrap();
+        run(dir.to_str().unwrap(), true, false).unwrap();
 
         assert!(dc.join("kap.toml").exists());
         assert!(dc.join(OVERLAY_FILENAME).exists());
@@ -799,6 +827,33 @@ mod tests {
     }
 
     #[test]
+    fn existing_project_no_duplicate_overlay_entry() {
+        let dir = tempdir("scaffold-no-dup");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(
+            dc.join("devcontainer.json"),
+            format!(
+                r#"{{"service": "app", "dockerComposeFile": ["docker-compose.yml", "{OVERLAY_FILENAME}"], "workspaceFolder": "/workspaces/myproject", "initializeCommand": "kap sidecar-init"}}"#
+            ),
+        )
+        .unwrap();
+
+        run(dir.to_str().unwrap(), true, false).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        let compose_arr = updated["dockerComposeFile"].as_array().unwrap();
+        assert_eq!(compose_arr.len(), 2); // no duplicate
+        assert_eq!(compose_arr[1], OVERLAY_FILENAME);
+        // workspaceFolder should be preserved, not overwritten
+        assert_eq!(updated["workspaceFolder"], "/workspaces/myproject");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn existing_project_appends_to_compose_array() {
         let dir = tempdir("scaffold-array");
         let dc = dir.join(".devcontainer");
@@ -809,7 +864,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap(), true).unwrap();
+        run(dir.to_str().unwrap(), true, false).unwrap();
 
         let updated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
@@ -831,7 +886,21 @@ mod tests {
         fs::write(dc.join("devcontainer.json"), r#"{"service": "app"}"#).unwrap();
         fs::write(dc.join("kap.toml"), "").unwrap();
 
-        assert!(run(dir.to_str().unwrap(), true).is_err());
+        assert!(run(dir.to_str().unwrap(), true, false).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_project_force_overwrites_kap_toml() {
+        let dir = tempdir("scaffold-force");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(dc.join("devcontainer.json"), r#"{"service": "app"}"#).unwrap();
+        fs::write(dc.join("kap.toml"), "# old config").unwrap();
+
+        run(dir.to_str().unwrap(), true, true).unwrap();
+        let content = fs::read_to_string(dc.join("kap.toml")).unwrap();
+        assert!(content.contains("[proxy.network]")); // fresh config
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -842,7 +911,7 @@ mod tests {
         fs::create_dir_all(&dc).unwrap();
         // .devcontainer/ exists but no devcontainer.json
 
-        assert!(run(dir.to_str().unwrap(), true).is_err());
+        assert!(run(dir.to_str().unwrap(), true, false).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -854,7 +923,7 @@ mod tests {
         // No "service" field in json
         fs::write(dc.join("devcontainer.json"), r#"{}"#).unwrap();
 
-        run(dir.to_str().unwrap(), true).unwrap();
+        run(dir.to_str().unwrap(), true, false).unwrap();
 
         let overlay = fs::read_to_string(dc.join(OVERLAY_FILENAME)).unwrap();
         assert!(overlay.contains("app:"));
@@ -875,7 +944,7 @@ mod tests {
         )
         .unwrap();
 
-        run(dir.to_str().unwrap(), true).unwrap();
+        run(dir.to_str().unwrap(), true, false).unwrap();
 
         // docker-compose.yml should be created with the image
         let compose = fs::read_to_string(dc.join("docker-compose.yml")).unwrap();
@@ -1063,6 +1132,7 @@ mod tests {
             name: "gh",
             env: &["GH_TOKEN"],
             allow: &["*"],
+            deny: &[],
             env_defaults: &[("GH_TOKEN", "$(gh auth token)")],
         };
         let content = generate_env_file(&[&tool]);
@@ -1086,24 +1156,18 @@ mod tests {
     }
 
     #[test]
-    fn overlay_mounts_single_cli_shim() {
+    fn overlay_inlines_cli_shim_via_configs() {
         let compose = ComposeConfig::default();
         let tools = vec!["gh".to_string(), "aws".to_string()];
         let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test");
-        // Single cli-shim.sh mounted for each tool, not per-tool shim files
-        assert!(overlay.contains("./cli-shim.sh:/usr/local/bin/gh:ro"));
-        assert!(overlay.contains("./cli-shim.sh:/usr/local/bin/aws:ro"));
-        assert!(!overlay.contains("gh-shim.sh"));
-        assert!(!overlay.contains("aws-shim.sh"));
-    }
-
-    #[test]
-    fn gitignore_includes_cli_shim() {
-        let dir = tempdir("gitignore-shim");
-        gitignore_overlay(&dir).unwrap();
-        let content = fs::read_to_string(dir.join(".gitignore")).unwrap();
-        assert!(content.contains("cli-shim.sh"));
-        fs::remove_dir_all(&dir).unwrap();
+        // Shim is inlined via Docker Compose configs, not a separate file
+        assert!(overlay.contains("configs:\n  cli-shim:\n    content:"));
+        assert!(overlay.contains("target: /usr/local/bin/gh"));
+        assert!(overlay.contains("target: /usr/local/bin/aws"));
+        assert!(overlay.contains("mode: 0755"));
+        assert!(!overlay.contains("cli-shim.sh"));
+        // kap-bin volume still mounted for the binary
+        assert!(overlay.contains("kap-bin:/opt/kap:ro"));
     }
 
     #[test]

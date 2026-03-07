@@ -34,6 +34,10 @@ enum Command {
         /// Skip confirmation prompts
         #[arg(short, long)]
         yes: bool,
+
+        /// Overwrite existing kap.toml
+        #[arg(short, long)]
+        force: bool,
     },
     /// Start the devcontainer
     #[command(display_order = 2)]
@@ -214,7 +218,11 @@ async fn main() -> anyhow::Result<()> {
         Command::SidecarCliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::Down { project, volumes } => container::down(project, volumes),
         Command::Exec { project, cmd } => container::exec(project, cmd),
-        Command::Init { project_dir, yes } => init::run(&project_dir, yes),
+        Command::Init {
+            project_dir,
+            yes,
+            force,
+        } => init::run(&project_dir, yes, force),
         Command::SidecarInit { project_dir } => init_env::run(&project_dir),
         Command::List { stats } => container::list(stats),
         Command::Mcp { command } => match command {

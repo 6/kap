@@ -9,12 +9,6 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// Generic CLI shim: uses argv[0] to determine the tool name, then forwards
-/// to the kap binary which detects the invocation name (busybox pattern).
-/// One file is mounted at /usr/local/bin/<tool> for each configured tool.
-const CLI_SHIM: &str =
-    "#!/bin/sh\nexec /opt/kap/kap sidecar-cli-shim \"$(basename \"$0\")\" \"$@\"\n";
-
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
@@ -135,19 +129,6 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         "[sidecar-init] regenerated {}",
         crate::init::OVERLAY_FILENAME
     );
-
-    // Write single generic CLI shim (mounted as each tool name in the overlay)
-    if !cli_tools.is_empty() {
-        let shim_path = devcontainer_dir.join("cli-shim.sh");
-        std::fs::write(&shim_path, CLI_SHIM)
-            .with_context(|| format!("writing {}", shim_path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))?;
-        }
-        eprintln!("[sidecar-init] wrote cli-shim.sh");
-    }
 
     Ok(())
 }
@@ -513,12 +494,5 @@ allow = ["github.com"]
         }
 
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn cli_shim_uses_sidecar_cli_shim_command() {
-        assert!(CLI_SHIM.contains("sidecar-cli-shim"));
-        assert!(CLI_SHIM.contains("basename"));
-        assert!(CLI_SHIM.starts_with("#!/bin/sh\n"));
     }
 }
