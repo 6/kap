@@ -2,6 +2,7 @@ pub mod agent;
 pub mod api;
 pub mod auth;
 pub mod containers;
+pub mod web;
 pub mod ws;
 
 use std::path::{Path, PathBuf};
@@ -108,14 +109,25 @@ async fn handle_request(
 async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Response<Body>> {
     let path = req.uri().path().to_string();
 
-    // Auth check: all routes require a valid bearer token
-    let token = extract_bearer_token(&req);
-    let auth_result = match token {
+    // Serve the web UI at / (no auth required — the app handles auth client-side)
+    if path == "/" || path == "/index.html" {
+        return Ok(web::serve_app());
+    }
+
+    // Extract token from Authorization header or ?token= query param
+    // (WebSocket API can't set headers, so we support query param for /ws/ routes)
+    let token = extract_bearer_token(&req).map(String::from).or_else(|| {
+        req.uri().query().and_then(|q| {
+            q.split('&')
+                .find_map(|p| p.strip_prefix("token=").map(String::from))
+        })
+    });
+    let auth_result = match token.as_deref() {
         Some(t) => auth::validate_token(&state.data_dir, t),
         None => None,
     };
 
-    // Special case: /api/pair only accepts the pairing token
+    // /api/pair only accepts the pairing token
     if path == "/api/pair" {
         match auth_result.as_deref() {
             Some("pairing") => return api::handle(req, &state).await,
@@ -131,7 +143,7 @@ async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Respon
         }
     }
 
-    // All other routes accept either pairing token or session token
+    // All other API/WS routes require a valid token
     if auth_result.is_none() {
         return Ok(Response::builder()
             .status(StatusCode::UNAUTHORIZED)
@@ -142,7 +154,6 @@ async fn route(req: Request<Incoming>, state: Arc<RemoteState>) -> Result<Respon
             .unwrap());
     }
 
-    // Route to handler
     if path.starts_with("/ws/") {
         ws::handle(req, state).await
     } else if path.starts_with("/api/") {
@@ -183,7 +194,9 @@ fn build_tls_config(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfi
 pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
     let token = auth::load_or_generate_pairing_token(data_dir)?;
     let ip = auth::local_ip().unwrap_or_else(|| "localhost".to_string());
-    let url = format!("devg://{ip}:{port}:{token}");
+    // HTTPS URL so scanning the QR opens the browser directly.
+    // Token in hash fragment so it's not sent to the server in the URL.
+    let url = format!("https://{ip}:{port}/#{token}");
 
     auth::print_qr(&url);
     Ok(())

@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>devg</title>
+<style>
+:root {
+  --bg: #1a1a2e; --fg: #c8d6e5; --dim: #576574; --accent: #0abde3;
+  --red: #ee5a24; --green: #78e08f; --yellow: #f6e58d;
+  --surface: #16213e; --border: #2c3e6b;
+  --font-size: 13px;
+}
+.light {
+  --bg: #f5f5f0; --fg: #2d3436; --dim: #999; --accent: #0984e3;
+  --red: #d63031; --green: #27ae60; --yellow: #f39c12;
+  --surface: #fff; --border: #ddd;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: var(--font-size); line-height: 1.5;
+  background: var(--bg); color: var(--fg);
+  min-height: 100vh; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface); position: sticky; top: 0; z-index: 10;
+}
+.header h1 { font-size: 1.1em; font-weight: 600; color: var(--accent); }
+.header-right { display: flex; gap: 12px; align-items: center; }
+.icon-btn {
+  background: none; border: none; color: var(--dim); font-size: 1.2em;
+  cursor: pointer; padding: 4px;
+}
+.icon-btn:hover { color: var(--fg); }
+
+.tabs {
+  display: flex; border-bottom: 1px solid var(--border);
+  background: var(--surface); position: sticky; top: 49px; z-index: 9;
+}
+.tab {
+  flex: 1; padding: 10px 0; text-align: center; font-size: 0.85em;
+  color: var(--dim); cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color 0.2s;
+}
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.view { display: none; flex: 1; overflow-y: auto; padding: 12px 16px; }
+.view.active { display: block; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin-bottom: 10px;
+}
+.card-label { color: var(--dim); font-size: 0.8em; margin-bottom: 2px; }
+.card-value { font-size: 1em; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-dot.up { background: var(--green); }
+.status-dot.down { background: var(--red); }
+
+.log-line {
+  padding: 3px 0; border-bottom: 1px solid var(--border);
+  font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.log-line .ts { color: var(--dim); }
+.log-line .domain { color: var(--fg); }
+.log-line .allowed { color: var(--green); }
+.log-line .denied { color: var(--red); }
+
+.event { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.event .role { font-weight: 600; font-size: 0.85em; }
+.event .role.user { color: var(--accent); }
+.event .role.assistant { color: var(--green); }
+.event .role.system { color: var(--yellow); }
+.event .summary { margin-top: 2px; color: var(--fg); word-break: break-word; }
+.event .tool { color: var(--yellow); font-size: 0.85em; }
+.event .ts { color: var(--dim); font-size: 0.8em; }
+
+.session-item {
+  padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.session-item:hover { color: var(--accent); }
+.session-item .sid { font-size: 0.85em; color: var(--accent); }
+.session-item .meta { font-size: 0.8em; color: var(--dim); }
+
+.input-row {
+  display: flex; gap: 8px; padding: 12px 16px;
+  border-top: 1px solid var(--border); background: var(--surface);
+  position: sticky; bottom: 0;
+}
+.input-row input {
+  flex: 1; padding: 8px 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  font-family: inherit; font-size: inherit; outline: none;
+}
+.input-row input:focus { border-color: var(--accent); }
+.input-row button {
+  padding: 8px 16px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; font-family: inherit;
+  font-size: inherit; cursor: pointer;
+}
+.input-row button:disabled { opacity: 0.4; cursor: default; }
+.btn-danger {
+  padding: 8px 16px; border-radius: 6px; border: 1px solid var(--red);
+  background: none; color: var(--red); font-family: inherit;
+  font-size: inherit; cursor: pointer; margin-top: 8px;
+}
+.btn-danger:hover { background: var(--red); color: #fff; }
+.back-btn {
+  color: var(--accent); cursor: pointer; font-size: 0.9em;
+  margin-bottom: 8px; display: inline-block;
+}
+
+.diff { white-space: pre-wrap; font-size: 0.85em; }
+.diff .add { color: var(--green); }
+.diff .del { color: var(--red); }
+.diff .hunk { color: var(--accent); }
+
+.settings-panel {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 100; justify-content: center; align-items: center;
+}
+.settings-panel.open { display: flex; }
+.settings-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px; width: 280px;
+}
+.settings-box h2 { font-size: 1em; margin-bottom: 16px; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.setting-row label { font-size: 0.9em; color: var(--dim); }
+.toggle {
+  width: 44px; height: 24px; border-radius: 12px; background: var(--border);
+  position: relative; cursor: pointer; transition: background 0.2s;
+}
+.toggle.on { background: var(--accent); }
+.toggle::after {
+  content: ''; position: absolute; width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; top: 2px; left: 2px; transition: transform 0.2s;
+}
+.toggle.on::after { transform: translateX(20px); }
+.font-btns { display: flex; gap: 8px; }
+.font-btn {
+  width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border);
+  background: none; color: var(--fg); font-family: inherit; cursor: pointer;
+  font-size: 1.1em; display: flex; align-items: center; justify-content: center;
+}
+.font-btn:hover { border-color: var(--accent); }
+
+.empty { color: var(--dim); text-align: center; padding: 40px 0; }
+.filter-row {
+  display: flex; gap: 8px; margin-bottom: 10px;
+}
+.filter-btn {
+  padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: none; color: var(--dim); font-family: inherit; font-size: 0.8em;
+  cursor: pointer;
+}
+.filter-btn.active { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>devg</h1>
+  <div class="header-right">
+    <button class="icon-btn" onclick="openSettings()" title="Settings">⚙</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-view="status" onclick="switchTab('status')">Status</div>
+  <div class="tab" data-view="logs" onclick="switchTab('logs')">Logs</div>
+  <div class="tab" data-view="agent" onclick="switchTab('agent')">Agent</div>
+</div>
+
+<!-- Status -->
+<div id="v-status" class="view active"></div>
+
+<!-- Logs -->
+<div id="v-logs" class="view">
+  <div class="filter-row">
+    <button class="filter-btn active" data-filter="all" onclick="setLogFilter('all')">All</button>
+    <button class="filter-btn" data-filter="denied" onclick="setLogFilter('denied')">Denied</button>
+  </div>
+  <div id="log-entries"></div>
+</div>
+
+<!-- Agent -->
+<div id="v-agent" class="view">
+  <div id="agent-sessions"></div>
+  <div id="agent-detail" style="display:none"></div>
+</div>
+
+<!-- Settings overlay -->
+<div id="settings" class="settings-panel" onclick="if(event.target===this)closeSettings()">
+  <div class="settings-box">
+    <h2>Settings</h2>
+    <div class="setting-row">
+      <label>Light mode</label>
+      <div id="theme-toggle" class="toggle" onclick="toggleTheme()"></div>
+    </div>
+    <div class="setting-row">
+      <label>Font size</label>
+      <div class="font-btns">
+        <button class="font-btn" onclick="adjustFont(-1)">A-</button>
+        <button class="font-btn" onclick="adjustFont(1)">A+</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = location.origin;
+let TOKEN = localStorage.getItem('devg_token');
+let logWs = null;
+let agentWs = null;
+let logFilter = 'all';
+let currentSession = null;
+
+// --- Auth ---
+async function init() {
+  const hash = location.hash.slice(1);
+  if (hash && hash.length > 0 && !hash.includes('/')) {
+    // Pairing token in URL fragment — exchange for session token
+    try {
+      const res = await apiFetch('/api/pair', { method: 'POST', pairingToken: hash });
+      if (res.session_token) {
+        TOKEN = res.session_token;
+        localStorage.setItem('devg_token', TOKEN);
+        history.replaceState(null, '', '/');
+      }
+    } catch(e) {
+      console.error('pairing failed', e);
+    }
+  }
+  if (!TOKEN) {
+    document.getElementById('v-status').innerHTML =
+      '<div class="empty">No token. Scan the QR code from<br><code>devg remote pair</code></div>';
+    return;
+  }
+  loadStatus();
+  loadSettings();
+}
+
+async function apiFetch(path, opts = {}) {
+  const token = opts.pairingToken || TOKEN;
+  const res = await fetch(BASE + path, {
+    method: opts.method || 'GET',
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      ...(opts.body ? {'Content-Type': 'application/json'} : {})
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  return res.json();
+}
+
+// --- Tabs ---
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'v-' + name));
+  if (name === 'status') loadStatus();
+  if (name === 'logs') connectLogs();
+  if (name === 'agent') { showSessionsList(); loadSessions(); }
+}
+
+// --- Status ---
+async function loadStatus() {
+  try {
+    const s = await apiFetch('/api/status');
+    const el = document.getElementById('v-status');
+    const app = s.containers?.app;
+    const sc = s.containers?.sidecar;
+    el.innerHTML = `
+      <div class="card">
+        <div class="card-label">App Container</div>
+        <div class="card-value">${app
+          ? `<span class="status-dot up"></span>${esc(app.name)}`
+          : `<span class="status-dot down"></span>not running`}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Sidecar</div>
+        <div class="card-value">${sc
+          ? `<span class="status-dot up"></span>${esc(sc.name)}`
+          : `<span class="status-dot down"></span>not running`}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Proxy</div>
+        <div class="card-value"><span class="status-dot ${s.proxy?.listening ? 'up' : 'down'}"></span>${s.proxy?.listening ? 'listening' : 'down'}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Denied requests</div>
+        <div class="card-value">${s.proxy?.denied_count ?? 0}</div>
+      </div>
+    `;
+  } catch(e) {
+    document.getElementById('v-status').innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+// --- Logs ---
+function connectLogs() {
+  if (logWs && logWs.readyState <= 1) return;
+  const el = document.getElementById('log-entries');
+  el.innerHTML = '<div class="empty">connecting...</div>';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  logWs = new WebSocket(`${proto}//${location.host}/ws/logs?token=${TOKEN}`);
+  logWs.onopen = () => { el.innerHTML = ''; };
+  logWs.onmessage = (e) => {
+    try {
+      const entry = JSON.parse(e.data);
+      if (logFilter === 'denied' && entry.action !== 'denied') return;
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      const ts = entry.ts ? entry.ts.split('T')[1]?.slice(0,8) : '';
+      div.innerHTML = `<span class="ts">${ts}</span> <span class="${entry.action}">${entry.action?.slice(0,1).toUpperCase()}</span> <span class="domain">${esc(entry.domain || '?')}</span>`;
+      el.prepend(div);
+      while (el.children.length > 200) el.removeChild(el.lastChild);
+    } catch(_) {}
+  };
+  logWs.onclose = () => {
+    setTimeout(() => { if (document.querySelector('.tab[data-view="logs"]').classList.contains('active')) connectLogs(); }, 3000);
+  };
+}
+
+function setLogFilter(f) {
+  logFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  document.getElementById('log-entries').innerHTML = '';
+  if (logWs) logWs.close();
+  logWs = null;
+  connectLogs();
+}
+
+// --- Agent ---
+async function loadSessions() {
+  const el = document.getElementById('agent-sessions');
+  try {
+    const sessions = await apiFetch('/api/agent/sessions');
+    if (!sessions.length) { el.innerHTML = '<div class="empty">No sessions found</div>'; return; }
+    el.innerHTML = sessions.map(s => `
+      <div class="session-item" onclick="openSession('${esc(s.id)}')">
+        <div class="sid">${esc(s.id.slice(0,8))}…</div>
+        <div class="meta">${esc(s.project)} · ${s.event_count} events</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+async function openSession(id) {
+  currentSession = id;
+  document.getElementById('agent-sessions').style.display = 'none';
+  const el = document.getElementById('agent-detail');
+  el.style.display = 'block';
+  el.innerHTML = '<div class="empty">loading...</div>';
+
+  try {
+    const events = await apiFetch(`/api/agent/session/${id}`);
+    let html = `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
+    html += `<div style="margin:8px 0"><button class="btn-danger" onclick="cancelAgent('${esc(id)}')">Cancel agent</button></div>`;
+    html += '<div id="session-events">';
+    for (const ev of events) {
+      html += renderEvent(ev);
+    }
+    html += '</div>';
+    el.innerHTML = html;
+
+    // Connect WebSocket for live updates
+    connectAgentWs(id);
+  } catch(e) {
+    el.innerHTML = `<span class="back-btn" onclick="showSessionsList()">← back</span><div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+function renderEvent(ev) {
+  const role = ev.role || ev.type;
+  const roleClass = ev.role === 'user' ? 'user' : ev.role === 'assistant' ? 'assistant' : 'system';
+  const ts = ev.timestamp ? ev.timestamp.split('T')[1]?.slice(0,8) : '';
+  let summary = esc(ev.summary || '');
+  if (ev.tool_name) summary = `<span class="tool">${esc(ev.tool_name)}</span> ${summary}`;
+  return `<div class="event"><span class="role ${roleClass}">${esc(role)}</span> <span class="ts">${ts}</span><div class="summary">${summary}</div></div>`;
+}
+
+function connectAgentWs(id) {
+  if (agentWs) agentWs.close();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  agentWs = new WebSocket(`${proto}//${location.host}/ws/agent/${id}?token=${TOKEN}`);
+  agentWs.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      const container = document.getElementById('session-events');
+      if (container) container.innerHTML += renderEvent(ev);
+    } catch(_) {}
+  };
+}
+
+function showSessionsList() {
+  currentSession = null;
+  if (agentWs) { agentWs.close(); agentWs = null; }
+  document.getElementById('agent-sessions').style.display = '';
+  document.getElementById('agent-detail').style.display = 'none';
+  loadSessions();
+}
+
+async function cancelAgent(id) {
+  if (!confirm('Send SIGINT to the running agent?')) return;
+  try {
+    const res = await apiFetch(`/api/agent/session/${id}/cancel`, { method: 'POST' });
+    alert(res.message || 'done');
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function sendMessage(id) {
+  const input = document.getElementById('msg-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  try {
+    await apiFetch(`/api/agent/session/${id}/message`, { method: 'POST', body: { message: msg } });
+    input.value = '';
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// --- Settings ---
+function openSettings() { document.getElementById('settings').classList.add('open'); }
+function closeSettings() { document.getElementById('settings').classList.remove('open'); }
+
+function toggleTheme() {
+  document.body.classList.toggle('light');
+  const isLight = document.body.classList.contains('light');
+  document.getElementById('theme-toggle').classList.toggle('on', isLight);
+  localStorage.setItem('devg_theme', isLight ? 'light' : 'dark');
+}
+
+function adjustFont(delta) {
+  const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--font-size'));
+  const next = Math.max(10, Math.min(20, current + delta));
+  document.documentElement.style.setProperty('--font-size', next + 'px');
+  localStorage.setItem('devg_fontsize', next);
+}
+
+function loadSettings() {
+  if (localStorage.getItem('devg_theme') === 'light') {
+    document.body.classList.add('light');
+    document.getElementById('theme-toggle').classList.add('on');
+  }
+  const fs = localStorage.getItem('devg_fontsize');
+  if (fs) document.documentElement.style.setProperty('--font-size', fs + 'px');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+init();
+</script>
+</body>
+</html>
