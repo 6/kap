@@ -148,7 +148,10 @@ fn find_app_container() -> Result<String> {
         }
     }
 
-    anyhow::bail!("no running devcontainer found with devg networking. Is the devcontainer up?")
+    anyhow::bail!(
+        "no running devcontainer found with devg networking.\n\n  \
+         Start it with: devcontainer up --workspace-folder ."
+    )
 }
 
 fn exec_in(container: &str, cmd: &[&str]) -> Option<String> {
