@@ -8,3 +8,6 @@ target/
 
 # Generated credentials (from init-host.sh)
 .devcontainer/.env
+
+# AI agents
+.claude/setings.local.json
