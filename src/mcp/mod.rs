@@ -116,7 +116,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                     let available = list_auth_files(&config.auth_dir);
                     if available.is_empty() {
                         eprintln!(
-                            "[mcp] skipping {}: no auth registered (run `kap mcp add {} <upstream>`)",
+                            "[mcp] skipping {}: no auth registered (run `kap mcp add {} <url>`)",
                             server_cfg.name, server_cfg.name
                         );
                     } else {

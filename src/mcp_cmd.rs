@@ -14,7 +14,7 @@ fn auth_dir() -> PathBuf {
     PathBuf::from(auth::host_auth_dir())
 }
 
-/// `kap mcp add <name> <upstream>` — run OAuth or store static headers.
+/// `kap mcp add <name> <url>` — run OAuth or store static headers.
 pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -> Result<()> {
     let dir = auth_dir();
     let file_path = dir.join(format!("{name}.json"));
@@ -98,45 +98,77 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
 pub fn list() -> Result<()> {
     let dir = auth_dir();
 
-    if !dir.exists() {
-        println!("No MCP servers registered. Run `kap mcp add <name> <upstream>` to add one.");
-        return Ok(());
-    }
-
-    let mut entries: Vec<(String, StoredAuth)> = std::fs::read_dir(&dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let path = e.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                return None;
-            }
-            let name = path.file_stem()?.to_str()?.to_string();
-            let auth = StoredAuth::load(&path).ok()?;
-            Some((name, auth))
-        })
-        .collect();
-
-    if entries.is_empty() {
-        println!("No MCP servers registered. Run `kap mcp add <name> <upstream>` to add one.");
-        return Ok(());
-    }
+    let mut entries: Vec<(String, StoredAuth)> = if dir.exists() {
+        std::fs::read_dir(&dir)
+            .with_context(|| format!("reading {}", dir.display()))?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let path = e.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    return None;
+                }
+                let name = path.file_stem()?.to_str()?.to_string();
+                let auth = StoredAuth::load(&path).ok()?;
+                Some((name, auth))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Header
-    println!("{:<16} {:<40} EXPIRES", "NAME", "UPSTREAM");
-    println!("{:<16} {:<40} -------", "----", "--------");
+    let registered: std::collections::HashSet<String> =
+        entries.iter().map(|(n, _)| n.clone()).collect();
+
+    // Check kap.toml for configured servers not yet registered
+    let config_path = std::path::Path::new(".devcontainer/kap.toml");
+    let config_servers: Vec<String> = if config_path.exists() {
+        if let Ok(cfg) = crate::config::Config::load(&config_path.to_string_lossy()) {
+            if let Some(mcp) = &cfg.mcp {
+                mcp.servers
+                    .iter()
+                    .filter(|s| !registered.contains(&s.name) && s.token_env.is_none())
+                    .map(|s| s.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    if entries.is_empty() && config_servers.is_empty() {
+        println!("No MCP servers registered.");
+        println!("Run `kap mcp add <name> <url>` to add one.");
+        return Ok(());
+    }
 
     for (name, auth) in &entries {
+        let auth_type = if !auth.headers.is_empty() {
+            "headers"
+        } else if auth.access_token.is_empty() {
+            "none"
+        } else {
+            "oauth"
+        };
         let expires = auth
             .expires_at
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "never".to_string());
+            .map(|dt| format!(", expires {}", dt.format("%Y-%m-%d %H:%M")))
+            .unwrap_or_default();
+        println!("\x1b[32m✓\x1b[0m {name}");
+        println!("  {}{expires}", auth.upstream);
+        println!("  auth: {auth_type}");
+    }
 
-        println!("{:<16} {:<40} {}", name, auth.upstream, expires);
+    for name in &config_servers {
+        println!("\x1b[31m✗\x1b[0m {name}");
+        println!("  in kap.toml but not registered — run `kap mcp add {name} <url>`");
     }
 
     Ok(())
@@ -148,7 +180,7 @@ pub async fn get(name: &str) -> Result<()> {
     let file_path = dir.join(format!("{name}.json"));
 
     if !file_path.exists() {
-        anyhow::bail!("no auth registered for '{name}'. Run `kap mcp add {name} <upstream>`");
+        anyhow::bail!("no auth registered for '{name}'. Run `kap mcp add {name} <url>`");
     }
 
     let auth = StoredAuth::load(&file_path)?;

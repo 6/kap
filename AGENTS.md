@@ -9,7 +9,10 @@ cargo check          # fast compile check
 cargo build          # full build
 cargo test           # run all tests
 cargo run -- --help  # CLI help
+cargo install --path .  # install to ~/.cargo/bin
 ```
+
+After any changes to CLI commands or flags, run `cargo install --path .` so the locally installed `kap` binary stays current.
 
 ## Architecture
 

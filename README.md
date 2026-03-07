@@ -192,12 +192,13 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 | `kap list` | List running devcontainers |
 | `kap status` | Check if everything is wired correctly |
 | `kap why-denied` | Show denied requests from the proxy log |
-| `kap mcp add <name> <url> [--header]` | Register an MCP server (OAuth or API key) |
+| `kap mcp add <name> <url>` | Register an MCP server (OAuth or API key) |
 | `kap mcp get <name>` | Show server details and tools list |
 | `kap mcp list` | List registered servers |
-| `kap remote start` | Start the remote access daemon |
-| `kap remote pair` | Show QR code for phone pairing |
-| `kap remote devices` | List paired devices |
+| `kap mcp remove <name>` | Remove a registered server |
+| `kap remote start` | Start the remote access daemon (shows QR code) |
+| `kap remote stop` | Stop the remote access daemon |
+| `kap remote status` | Show daemon status and paired devices |
 | `kap remote revoke <id>` | Revoke a paired device |
 
 ## Development

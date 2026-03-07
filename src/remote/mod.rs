@@ -45,7 +45,7 @@ pub async fn start(listen: &str, data_dir: PathBuf) -> Result<()> {
     if let Some(pid) = read_pid(&data_dir)
         && is_process_running(pid)
     {
-        eprintln!("[remote] already running (pid {pid})");
+        eprintln!("[remote] warning: daemon already running (pid {pid}), showing QR code");
         eprintln!();
         let port: u16 = listen
             .rsplit(':')
@@ -227,17 +227,31 @@ pub fn print_pair(data_dir: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// List paired devices.
-pub fn list_devices(data_dir: &Path) {
+/// Show daemon status and paired devices.
+pub fn remote_status(data_dir: &Path) {
+    // Daemon status
+    match read_pid(data_dir) {
+        Some(pid) if is_process_running(pid) => {
+            println!("Daemon: running (pid {pid})");
+        }
+        Some(_) => {
+            println!("Daemon: not running (stale pid file)");
+            let _ = std::fs::remove_file(pid_file(data_dir));
+        }
+        None => {
+            println!("Daemon: not running");
+        }
+    }
+
+    // Paired devices
     let devices = auth::load_devices(data_dir);
     if devices.is_empty() {
-        println!("No paired devices.");
-        println!("Run `kap remote pair` to get the pairing QR code.");
-        return;
-    }
-    println!("{:<14} {:<20} {:<26}", "ID", "NAME", "PAIRED");
-    for d in &devices {
-        println!("{:<14} {:<20} {:<26}", d.id, d.name, d.paired_at);
+        println!("\nNo paired devices. Run `kap remote start` to pair.");
+    } else {
+        println!("\n{:<14} {:<20} {:<26}", "ID", "NAME", "PAIRED");
+        for d in &devices {
+            println!("{:<14} {:<20} {:<26}", d.id, d.name, d.paired_at);
+        }
     }
 }
 

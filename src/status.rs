@@ -136,10 +136,10 @@ pub fn run() -> Result<()> {
                     std::path::Path::new(&host_auth_dir).join(format!("{}.json", server.name));
                 if !auth_path.exists() {
                     let hint = if available.is_empty() {
-                        format!("run `kap mcp add {} <upstream>`", server.name)
+                        format!("run `kap mcp add {} <url>`", server.name)
                     } else {
                         format!(
-                            "available: {}. run `kap mcp add {} <upstream>` or check for typos",
+                            "available: {}. run `kap mcp add {} <url>` or check for typos",
                             available.join(", "),
                             server.name
                         )
@@ -274,11 +274,22 @@ fn print_config_summary(config: &crate::config::Config) {
         println!("    domains: {allow_count} allowed");
     }
     if let Some(ref mcp) = config.mcp {
-        let names: Vec<&str> = mcp.servers.iter().map(|s| s.name.as_str()).collect();
-        if names.is_empty() {
+        if mcp.servers.is_empty() {
             println!("    mcp: no servers");
         } else {
-            println!("    mcp: {}", names.join(", "));
+            let host_auth_dir = crate::mcp::auth::host_auth_dir();
+            let registered = crate::mcp::list_auth_files(&host_auth_dir);
+            println!("    mcp:");
+            for s in &mcp.servers {
+                if s.token_env.is_some() || registered.contains(&s.name) {
+                    println!("      \x1b[32m✓\x1b[0m {}", s.name);
+                } else {
+                    println!(
+                        "      \x1b[31m✗\x1b[0m {} — run `kap mcp add {0} <url>`",
+                        s.name
+                    );
+                }
+            }
         }
     }
     if let Some(ref cli) = config.cli {

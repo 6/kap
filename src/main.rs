@@ -145,8 +145,8 @@ enum RemoteCommand {
     },
     /// Stop the remote access daemon
     Stop,
-    /// List paired devices
-    Devices,
+    /// Show daemon status and paired devices
+    Status,
     /// Revoke a paired device
     Revoke {
         /// Device ID to revoke
@@ -257,8 +257,8 @@ async fn main() -> anyhow::Result<()> {
             match command {
                 RemoteCommand::Start { listen } => remote::start(&listen, data_dir).await,
                 RemoteCommand::Stop => remote::stop(),
-                RemoteCommand::Devices => {
-                    remote::list_devices(&data_dir);
+                RemoteCommand::Status => {
+                    remote::remote_status(&data_dir);
                     Ok(())
                 }
                 RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
