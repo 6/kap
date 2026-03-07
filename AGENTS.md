@@ -31,6 +31,7 @@ Single Rust binary with five components:
 - `src/proxy/mod.rs`:HTTP/HTTPS forward proxy (hyper + tokio)
 - `src/proxy/dns.rs`:DNS forwarder with domain filtering (prevents DNS exfiltration, not redundant with HTTP proxy)
 - `src/proxy/allowlist.rs`:wildcard domain matching, deny-overrides-allow (shared by HTTP proxy, DNS, and MCP proxy)
+- `src/proxy/sni.rs`:TLS ClientHello SNI extraction + CONNECT domain validation (blocks SNI-mismatch attacks)
 - `src/proxy/log.rs`:structured JSONL logging + `why-denied` reader
 - `src/mcp/mod.rs`:MCP proxy HTTP listener, request routing, tool filtering
 - `src/mcp/filter.rs`:tool name allowlist
@@ -60,7 +61,7 @@ Single Rust binary with five components:
 
 Every code change must include unit tests. Run `cargo test` before committing.
 
-After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint warnings and formatting drift. Fix **all** warnings before committing — CI runs clippy with `-D warnings` so any warning is a build failure.
+After any non-trivial change, run `cargo clippy` and `cargo fmt` to catch lint warnings and formatting drift. Fix **all** warnings before committing. CI runs clippy with `-D warnings` so any warning is a build failure.
 
 Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across all layers (domain proxy, DNS forwarder, MCP proxy, CLI proxy). Run these in the devcontainer after any change to proxy logic, config parsing, or docker-compose templates.
 
@@ -87,10 +88,10 @@ The `[compose]` section in `kap.toml` controls how the kap sidecar image is sour
 - Default (no `[compose]` section): uses `image: ghcr.io/6/kap:latest`
 - Build from source: `[compose] build = { context = "..", dockerfile = "...", target = "..." }`
 
-DO NOT edit `docker-compose.kap.yml` directly — changes will be overwritten. Edit `kap.toml` instead.
+DO NOT edit `docker-compose.kap.yml` directly. Changes will be overwritten. Edit `kap.toml` instead.
 
 ## Security model
 
-The domain proxy is a domain-level gate (not a request-level firewall). For HTTPS, it sees `CONNECT domain:443` but cannot inspect inside the TLS tunnel. No MITM.
+The domain proxy is a domain-level gate (not a request-level firewall). For HTTPS, it sees `CONNECT domain:443` and validates that the TLS SNI in the ClientHello matches the CONNECT target (blocking SNI-mismatch routing attacks), but cannot inspect inside the encrypted TLS tunnel. No MITM.
 
 The MCP proxy adds tool-level control: it inspects JSON-RPC `tools/list` and `tools/call` between the agent and remote MCP servers. Credentials (OAuth tokens, API keys) live on the proxy sidecar and never enter the app container.
