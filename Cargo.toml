@@ -1,6 +1,6 @@
 [package]
 name = "kap"
-version = "0.0.1-pre2"
+version = "0.0.1-pre3"
 edition = "2024"
 description = "Secure capsule for AI coding agents"
 license = "MIT"
