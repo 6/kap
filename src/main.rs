@@ -229,7 +229,43 @@ async fn main() -> anyhow::Result<()> {
             McpCommand::Remove { name } => mcp_cmd::remove(&name),
         },
         Command::SidecarProxy { observe, config } => {
-            let cfg = config::Config::load(&config)?;
+            // Retry config loading — Docker Desktop macOS bind mounts can be
+            // temporarily unavailable when the container first starts.
+            let cfg = {
+                let mut last_err = None;
+                let mut loaded = None;
+                for attempt in 0..5 {
+                    match config::Config::load(&config) {
+                        Ok(c) if !c.allow_domains().is_empty() || attempt == 4 => {
+                            loaded = Some(c);
+                            break;
+                        }
+                        Ok(_) => {
+                            eprintln!(
+                                "[sidecar] config has no allowed domains, retrying ({}/5)...",
+                                attempt + 1
+                            );
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[sidecar] config load failed: {e}, retrying ({}/5)...",
+                                attempt + 1
+                            );
+                            last_err = Some(e);
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                    }
+                }
+                match loaded {
+                    Some(c) => c,
+                    None => {
+                        return Err(
+                            last_err.unwrap_or_else(|| anyhow::anyhow!("config load failed"))
+                        );
+                    }
+                }
+            };
 
             let mcp_domains = cfg.mcp_upstream_domains();
             let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();

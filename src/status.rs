@@ -97,21 +97,33 @@ pub fn run() -> Result<()> {
         .find(|d| !d.starts_with('*'))
         .cloned();
 
+    // DNS resolve test: try dig first, fall back to getent hosts
     if let Some(ref domain) = allowed_domain {
-        match exec_in(&app, &["dig", "+short", "+time=3", domain]) {
-            Some(out) if !out.is_empty() => ok(&format!("DNS resolves {domain}"), &mut pass),
-            _ => bad(&format!("DNS failed to resolve {domain}"), &mut fail),
+        let resolved = exec_in(&app, &["dig", "+short", "+time=3", domain])
+            .filter(|out| !out.is_empty())
+            .or_else(|| exec_in(&app, &["getent", "hosts", domain]).filter(|out| !out.is_empty()));
+        match resolved {
+            Some(_) => ok(&format!("DNS resolves {domain}"), &mut pass),
+            None => bad(&format!("DNS failed to resolve {domain}"), &mut fail),
         }
     }
 
     // DNS block test (.invalid is reserved by RFC 2606)
-    match exec_in(&app, &["dig", "+short", "+time=3", "kap-test.invalid"]) {
-        Some(out) if out.is_empty() => ok("DNS blocks unlisted domains", &mut pass),
-        None => ok("DNS blocks unlisted domains", &mut pass),
-        _ => bad(
+    // dig: empty output = blocked. getent: exit code != 0 (None) = blocked.
+    let blocked = match exec_in(&app, &["dig", "+short", "+time=3", "kap-test.invalid"]) {
+        Some(out) => out.is_empty(), // dig ran, empty = NXDOMAIN = blocked
+        None => {
+            // dig not available, try getent
+            exec_in(&app, &["getent", "hosts", "kap-test.invalid"]).is_none()
+        }
+    };
+    if blocked {
+        ok("DNS blocks unlisted domains", &mut pass);
+    } else {
+        bad(
             "DNS resolved unlisted domain (forwarder may not be active)",
             &mut fail,
-        ),
+        );
     }
 
     // HTTPS block test
