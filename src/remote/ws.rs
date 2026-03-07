@@ -90,7 +90,7 @@ async fn stream_logs(mut ws: WsStream) -> Result<()> {
             "tail",
             "-f",
             "-n",
-            "20", // send last 20 lines as catch-up
+            "0", // no catch-up — REST handles initial load
             "/var/log/devg/proxy.jsonl",
         ],
     )

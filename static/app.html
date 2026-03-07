@@ -304,28 +304,50 @@ async function loadStatus() {
 }
 
 // --- Logs ---
-function connectLogs() {
-  if (logWs && logWs.readyState <= 1) return;
+async function connectLogs() {
   const el = document.getElementById('log-entries');
-  el.innerHTML = '<div class="empty">connecting...</div>';
+
+  // Load initial logs via REST (instant, no buffering issues)
+  try {
+    const endpoint = logFilter === 'denied' ? '/api/logs/denied' : '/api/logs?limit=50';
+    const entries = await apiFetch(endpoint);
+    el.innerHTML = '';
+    for (const entry of entries.reverse()) {
+      el.prepend(makeLogLine(entry));
+    }
+    if (!entries.length) el.innerHTML = '<div class="empty">no log entries yet</div>';
+  } catch(e) {
+    el.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+  }
+
+  // Then connect WebSocket for live updates
+  if (logWs && logWs.readyState <= 1) { logWs.close(); }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   logWs = new WebSocket(`${proto}//${location.host}/ws/logs?token=${TOKEN}`);
-  logWs.onopen = () => { el.innerHTML = ''; };
   logWs.onmessage = (e) => {
     try {
       const entry = JSON.parse(e.data);
       if (logFilter === 'denied' && entry.action !== 'denied') return;
-      const div = document.createElement('div');
-      div.className = 'log-line';
-      const ts = entry.ts ? entry.ts.split('T')[1]?.slice(0,8) : '';
-      div.innerHTML = `<span class="ts">${ts}</span> <span class="${entry.action}">${entry.action?.slice(0,1).toUpperCase()}</span> <span class="domain">${esc(entry.domain || '?')}</span>`;
-      el.prepend(div);
+      // Clear the "no log entries" placeholder
+      const empty = el.querySelector('.empty');
+      if (empty) empty.remove();
+      el.prepend(makeLogLine(entry));
       while (el.children.length > 200) el.removeChild(el.lastChild);
     } catch(_) {}
   };
   logWs.onclose = () => {
-    setTimeout(() => { if (document.querySelector('.tab[data-view="logs"]').classList.contains('active')) connectLogs(); }, 3000);
+    setTimeout(() => {
+      if (document.querySelector('.tab[data-view="logs"]').classList.contains('active')) connectLogs();
+    }, 5000);
   };
+}
+
+function makeLogLine(entry) {
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  const ts = entry.ts ? entry.ts.split('T')[1]?.slice(0,8) : '';
+  div.innerHTML = `<span class="ts">${ts}</span> <span class="${entry.action}">${entry.action?.slice(0,1).toUpperCase()}</span> <span class="domain">${esc(entry.domain || '?')}</span>`;
+  return div;
 }
 
 function setLogFilter(f) {
