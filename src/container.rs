@@ -108,6 +108,11 @@ pub fn list(stats: bool) -> Result<()> {
         return Ok(());
     }
 
+    println!(
+        "Each project has an app container (agent workspace) and a kap sidecar (proxy + network controls)."
+    );
+    println!();
+
     let resource_stats = if stats {
         collect_stats()
     } else {
@@ -272,7 +277,7 @@ fn workspace_folder() -> Result<PathBuf> {
 }
 
 /// Find the compose project name from running containers matching this workspace.
-fn find_compose_project(workspace: &Path) -> Option<String> {
+pub(crate) fn find_compose_project(workspace: &Path) -> Option<String> {
     let workspace_str = workspace.to_string_lossy();
     let output = Command::new("docker")
         .args([

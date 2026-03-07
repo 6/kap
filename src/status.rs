@@ -4,7 +4,9 @@
 /// and exec's checks into the app container.
 use anyhow::Result;
 
-use crate::remote::containers::{exec_exit_code, exec_in, find_containers};
+use crate::remote::containers::{
+    exec_exit_code, exec_in, find_all_containers, find_by_project, find_containers,
+};
 
 /// Read the sidecar IP from the app container's HTTP_PROXY env var.
 fn proxy_ip(app: &str) -> String {
@@ -33,8 +35,34 @@ pub fn run() -> Result<()> {
     let config = load_local_config();
     print_config_summary(&config);
 
-    let (app, sidecar) = find_containers()?;
+    let (app, sidecar) = match std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::container::find_compose_project(&cwd))
+    {
+        Some(project) => find_by_project(&project)?,
+        None => find_containers()?,
+    };
     let proxy_ip = proxy_ip(&app);
+
+    // Warn if other kap projects are also running (can cause confusion)
+    if let Ok(all) = find_all_containers()
+        && all.len() > 1
+    {
+        let others: Vec<&str> = all
+            .iter()
+            .filter(|g| g.app != app)
+            .map(|g| g.project.as_str())
+            .collect();
+        if !others.is_empty() {
+            println!(
+                "  \x1b[33m!\x1b[0m  {} other project(s) also running: {}",
+                others.len(),
+                others.join(", ")
+            );
+            println!("     stop with: kap down <project>");
+            println!();
+        }
+    }
 
     let mut pass = 0;
     let mut fail = 0;
@@ -172,16 +200,7 @@ pub fn run() -> Result<()> {
                     if let Some(count) = v["tools"].as_u64() {
                         ok(&format!("\x1b[1m{name}\x1b[0m ({count} tools)"), &mut pass);
                     } else if let Some(err) = v["error"].as_str() {
-                        if err.contains("404") {
-                            bad(
-                                &format!(
-                                    "\x1b[1m{name}\x1b[0m: not loaded by sidecar (run `kap up --reset`)"
-                                ),
-                                &mut fail,
-                            );
-                        } else {
-                            bad(&format!("\x1b[1m{name}\x1b[0m: {err}"), &mut fail);
-                        }
+                        bad(&format!("\x1b[1m{name}\x1b[0m: {err}"), &mut fail);
                     }
                 }
             } else {

@@ -51,8 +51,18 @@ pub async fn fetch_tools(url: &str, auth: &McpAuth<'_>) -> Result<Vec<serde_json
         .map(String::from);
 
     if !resp.status().is_success() {
-        anyhow::bail!("initialize: HTTP {}", resp.status());
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let reason = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["reason"].as_str().map(String::from));
+        if let Some(reason) = reason {
+            anyhow::bail!("initialize: HTTP {status} ({reason})");
+        } else {
+            anyhow::bail!("initialize: HTTP {status}");
+        }
     }
+    // Drain the response body (may be SSE-streamed) before sending tools/list
     let _ = resp.text().await;
 
     // 2. tools/list with session
@@ -139,5 +149,114 @@ mod tests {
     #[test]
     fn parse_garbage_fails() {
         assert!(parse_mcp_response("not json or sse").is_err());
+    }
+
+    #[tokio::test]
+    async fn fetch_tools_404_with_reason_includes_reason_in_error() {
+        // Start a mock server that returns 404 with a reason field
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                let io = hyper_util::rt::TokioIo::new(stream);
+                tokio::spawn(async move {
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            io,
+                            hyper::service::service_fn(|_req| async {
+                                let body = serde_json::json!({
+                                    "error": "unknown MCP server: broken",
+                                    "reason": "reading /etc/kap/auth/broken.json: No such file"
+                                });
+                                Ok::<_, hyper::Error>(
+                                    hyper::Response::builder()
+                                        .status(404)
+                                        .header("Content-Type", "application/json")
+                                        .body(http_body_util::Full::new(bytes::Bytes::from(
+                                            serde_json::to_vec(&body).unwrap(),
+                                        )))
+                                        .unwrap(),
+                                )
+                            }),
+                        )
+                        .await;
+                });
+            }
+        });
+
+        // Wait for server
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let auth = McpAuth::none();
+        let err = fetch_tools(&format!("http://127.0.0.1:{port}"), &auth)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("404"), "should contain status: {msg}");
+        assert!(msg.contains("No such file"), "should contain reason: {msg}");
+    }
+
+    #[tokio::test]
+    async fn fetch_tools_404_without_reason_shows_status_only() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                let io = hyper_util::rt::TokioIo::new(stream);
+                tokio::spawn(async move {
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            io,
+                            hyper::service::service_fn(|_req| async {
+                                let body = serde_json::json!({"error": "not found"});
+                                Ok::<_, hyper::Error>(
+                                    hyper::Response::builder()
+                                        .status(404)
+                                        .header("Content-Type", "application/json")
+                                        .body(http_body_util::Full::new(bytes::Bytes::from(
+                                            serde_json::to_vec(&body).unwrap(),
+                                        )))
+                                        .unwrap(),
+                                )
+                            }),
+                        )
+                        .await;
+                });
+            }
+        });
+
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let auth = McpAuth::none();
+        let err = fetch_tools(&format!("http://127.0.0.1:{port}"), &auth)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("404"), "should contain status: {msg}");
+        assert!(!msg.contains("reason"), "should not contain reason: {msg}");
     }
 }

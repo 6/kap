@@ -30,11 +30,13 @@ struct McpServer {
 
 struct McpState {
     servers: HashMap<String, McpServer>,
+    skipped: HashMap<String, String>,
     logger: ProxyLogger,
 }
 
 pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
     let mut servers = HashMap::new();
+    let mut skipped: HashMap<String, String> = HashMap::new();
 
     for server_cfg in &config.servers {
         // Expand ${VAR} in header values from env
@@ -112,20 +114,10 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                     eprintln!("[mcp] {} using headers only (no OAuth)", server_cfg.name);
                     UpstreamClient::with_headers_only(upstream.clone(), headers)
                 }
-                Err(_) => {
-                    let available = list_auth_files(&config.auth_dir);
-                    if available.is_empty() {
-                        eprintln!(
-                            "[mcp] skipping {}: no auth registered (run `kap mcp add {} <url>`)",
-                            server_cfg.name, server_cfg.name
-                        );
-                    } else {
-                        eprintln!(
-                            "[mcp] skipping {}: no auth registered. available servers: {}",
-                            server_cfg.name,
-                            available.join(", ")
-                        );
-                    }
+                Err(e) => {
+                    let reason = format!("{e:#}");
+                    eprintln!("[mcp] skipping {}: {reason}", server_cfg.name);
+                    skipped.insert(server_cfg.name.clone(), reason);
                     continue;
                 }
             }
@@ -136,7 +128,11 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
     }
 
-    let state = Arc::new(McpState { servers, logger });
+    let state = Arc::new(McpState {
+        servers,
+        skipped,
+        logger,
+    });
     let listener = TcpListener::bind(&config.listen).await?;
     eprintln!("[mcp] listening on {}", config.listen);
 
@@ -170,10 +166,11 @@ async fn handle_request(
     let server_name = path.split('/').next().unwrap_or("").to_string();
 
     let Some(server) = state.servers.get(&*server_name) else {
-        return Ok(json_response(
-            404,
-            &serde_json::json!({"error": format!("unknown MCP server: {server_name}")}),
-        ));
+        let mut body = serde_json::json!({"error": format!("unknown MCP server: {server_name}")});
+        if let Some(reason) = state.skipped.get(&*server_name) {
+            body["reason"] = serde_json::Value::String(reason.clone());
+        }
+        return Ok(json_response(404, &body));
     };
 
     // Only accept POST
@@ -462,6 +459,7 @@ mod tests {
 
         let state = Arc::new(McpState {
             servers,
+            skipped: HashMap::new(),
             logger: ProxyLogger::new("/dev/null"),
         });
 
@@ -738,5 +736,95 @@ mod tests {
 
         // initialize should be forwarded to upstream regardless of tool filter
         assert!(resp["result"]["serverInfo"].is_object());
+    }
+
+    #[tokio::test]
+    async fn skipped_server_returns_404_with_reason() {
+        let (upstream_port, _handle) = start_mock_upstream().await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"]).await;
+
+        // The test proxy has "test" registered. "broken" is not registered.
+        // Manually create a state with a skipped entry to test the reason field.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let mut skipped = HashMap::new();
+        skipped.insert(
+            "broken".to_string(),
+            "reading /etc/kap/auth/broken.json: Permission denied".to_string(),
+        );
+        let state = Arc::new(McpState {
+            servers: HashMap::new(),
+            skipped,
+            logger: ProxyLogger::new("/dev/null"),
+        });
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                let state = state.clone();
+                tokio::spawn(async move {
+                    let io = TokioIo::new(stream);
+                    let service = service_fn(move |req| {
+                        let state = state.clone();
+                        async move { handle_request(req, &state).await }
+                    });
+                    let _ = http1::Builder::new().serve_connection(io, service).await;
+                });
+            }
+        });
+
+        // Wait for listener to be ready
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let client = reqwest::Client::new();
+
+        // Skipped server should return 404 with reason
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/broken"))
+            .json(&serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Permission denied")
+        );
+
+        // Unknown server (not skipped) should return 404 without reason
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/unknown"))
+            .json(&serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body.get("reason").is_none());
+
+        // Verify the original proxy still works (no reason for truly unknown servers)
+        let resp = client
+            .post(format!("http://127.0.0.1:{proxy_port}/nonexistent"))
+            .json(&serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body.get("reason").is_none());
     }
 }
