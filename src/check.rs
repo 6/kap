@@ -19,22 +19,23 @@ pub async fn run_mcp(config_path: &str) -> Result<()> {
     let http = reqwest::Client::new();
     let mcp_base = "http://127.0.0.1:3129";
 
+    let mut set = tokio::task::JoinSet::new();
     for server in &mcp.servers {
+        let http = http.clone();
         let url = format!("{mcp_base}/{}", server.name);
-        let result = check_mcp_server(&http, &url).await;
-        match result {
-            Ok(count) => {
-                println!(
-                    "{}",
-                    serde_json::json!({"name": server.name, "tools": count})
-                );
+        let name = server.name.clone();
+        set.spawn(async move {
+            let result = check_mcp_server(&http, &url).await;
+            match result {
+                Ok(count) => serde_json::json!({"name": name, "tools": count}),
+                Err(e) => serde_json::json!({"name": name, "error": e.to_string()}),
             }
-            Err(e) => {
-                println!(
-                    "{}",
-                    serde_json::json!({"name": server.name, "error": e.to_string()})
-                );
-            }
+        });
+    }
+
+    while let Some(result) = set.join_next().await {
+        if let Ok(r) = result {
+            println!("{r}");
         }
     }
     Ok(())
