@@ -18,19 +18,9 @@ cargo install devcontainer-guard --version 0.0.1-pre1
 
 cd path/to/your/project
 devg init
-
-# Review and adjust allowed domains
-$EDITOR .devcontainer/devg.toml
-
+$EDITOR .devcontainer/devg.toml   # review allowed domains + MCP servers
 devcontainer up --workspace-folder .
 ```
-
-`devg init` detects whether you have an existing devcontainer or not:
-
-- **Existing project**: creates `devg.toml` and updates your `devcontainer.json`. Your existing compose file stays untouched.
-- **New project**: creates everything from scratch.
-
-The Docker Compose overlay (`docker-compose.devg.yml`) is **generated on the fly** by `devg init-env`, which runs automatically as `initializeCommand` on every `devcontainer up`. It is gitignored and always matches the installed devg version. You never need to edit it — configure the sidecar image in `devg.toml` instead.
 
 ## Domain allowlist
 
@@ -58,20 +48,24 @@ The MCP proxy sits between the agent and remote MCP servers. It controls which t
 
 ### Registering servers
 
-OAuth servers are registered once on the host. Tokens are stored in `~/.devg/auth/` and shared across projects:
+Register MCP servers on the host:
 
 ```bash
+# OAuth (opens browser)
 devg mcp add linear https://mcp.linear.app
-devg mcp add github https://mcp.github.com
+
+# API key via headers
+devg mcp add context7 https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY=sk-..."
+
 devg mcp list          # see registered servers
 devg mcp get linear    # show details + tools list
 ```
 
-Registered servers are **auto-discovered** — they're proxied automatically without any config in `devg.toml`. The agent connects to `http://172.28.0.3:3129/linear` instead of the real server. devg forwards requests with the stored auth.
+After registering, add each server to `devg.toml` with an `allow_tools` list (see below). The agent connects to `http://172.28.0.3:3129/<name>` instead of the real server. devg handles auth and tool filtering.
 
 ### Tool allowlist
 
-Each server needs a `[[mcp.servers]]` entry in `devg.toml` with an explicit `allow_tools` list. Same model as the domain allowlist — only what's listed is permitted:
+Each server needs a `[[mcp.servers]]` entry in `devg.toml` with an explicit `allow_tools` list. Same model as the domain allowlist - only what's listed is permitted:
 
 ```toml
 [mcp]
@@ -87,25 +81,7 @@ name = "github"
 allow_tools = ["get_*", "list_*", "search_*"]
 ```
 
-No `upstream` needed — it's read from the auth file. Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_user`, etc.).
-
-### Non-OAuth auth
-
-For servers that use API keys or custom headers instead of OAuth, specify `upstream` and auth in `devg.toml`:
-
-```toml
-# Bearer token from env var
-[[mcp.servers]]
-name = "github"
-upstream = "https://mcp.github.com"
-token_env = "GH_TOKEN"
-
-# Custom headers (${VAR} expanded from env)
-[[mcp.servers]]
-name = "context7"
-upstream = "https://mcp.context7.com/mcp"
-headers = { "CONTEXT7_API_KEY" = "${CONTEXT7_API_KEY}" }
-```
+Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_user`, etc.).
 
 ## Compose overlay
 
@@ -170,7 +146,7 @@ MCP server domains are intentionally **not** in the domain allowlist. The agent 
 | `devg init-env` | Host | Regenerate compose overlay + .env (runs as initializeCommand) |
 | `devg status` | Host | Check if everything is wired correctly |
 | `devg why-denied` | Host | Show denied requests from the proxy log |
-| `devg mcp add <name> <url>` | Host | Register an MCP server (OAuth 2.1) |
+| `devg mcp add <name> <url> [--header]` | Host | Register an MCP server (OAuth or API key) |
 | `devg mcp get <name>` | Host | Show server details and tools list |
 | `devg proxy` | Proxy sidecar | Domain proxy + DNS forwarder + MCP proxy (internal) |
 | `devg check` | Proxy sidecar | Health check (internal, used by Docker healthcheck) |
