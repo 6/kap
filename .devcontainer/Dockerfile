@@ -3,6 +3,7 @@ FROM rust:1.93-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+COPY static/ static/
 RUN cargo build --release && cp target/release/devg /usr/local/bin/devg
 
 # Proxy sidecar: devg binary + gh CLI.
