@@ -1,5 +1,7 @@
 pub mod filter;
+pub mod shim;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -13,23 +15,37 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
-use crate::config::GhConfig;
+use crate::config::CliConfig;
 use crate::proxy::log::{ProxyLogEntry, ProxyLogger};
-use filter::GhCommandFilter;
+use filter::CommandFilter;
 
-struct GhState {
-    filter: GhCommandFilter,
+struct CliTool {
+    filter: CommandFilter,
+    env_vars: Vec<String>,
+}
+
+struct CliState {
+    tools: HashMap<String, CliTool>,
     logger: ProxyLogger,
 }
 
-pub async fn run(config: &GhConfig, logger: ProxyLogger) -> Result<()> {
-    let state = Arc::new(GhState {
-        filter: GhCommandFilter::new(&config.allow),
-        logger,
-    });
+pub async fn run(config: &CliConfig, logger: ProxyLogger) -> Result<()> {
+    let mut tools = HashMap::new();
+    for tool_cfg in &config.tools {
+        let filter = CommandFilter::new(&tool_cfg.allow, &tool_cfg.deny);
+        eprintln!("[cli] {} ({})", tool_cfg.name, tool_cfg.allow.join(", "));
+        tools.insert(
+            tool_cfg.name.clone(),
+            CliTool {
+                filter,
+                env_vars: tool_cfg.env.clone(),
+            },
+        );
+    }
 
+    let state = Arc::new(CliState { tools, logger });
     let listener = TcpListener::bind(&config.listen).await?;
-    eprintln!("[gh] listening on {}", config.listen);
+    eprintln!("[cli] listening on {}", config.listen);
 
     loop {
         let (stream, _addr) = listener.accept().await?;
@@ -45,7 +61,7 @@ pub async fn run(config: &GhConfig, logger: ProxyLogger) -> Result<()> {
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await
                 && !e.to_string().contains("error shutting down connection")
             {
-                eprintln!("[gh] connection error: {e}");
+                eprintln!("[cli] connection error: {e}");
             }
         });
     }
@@ -53,11 +69,25 @@ pub async fn run(config: &GhConfig, logger: ProxyLogger) -> Result<()> {
 
 async fn handle_request(
     req: Request<Incoming>,
-    state: &GhState,
+    state: &CliState,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() != hyper::Method::POST {
         return Ok(error_response(405, "only POST is supported"));
     }
+
+    // Extract tool name from path: /gh -> "gh"
+    let tool_name = req
+        .uri()
+        .path()
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    let Some(tool) = state.tools.get(&tool_name) else {
+        return Ok(error_response(404, &format!("unknown tool: {tool_name}")));
+    };
 
     let body = req.into_body().collect().await?.to_bytes();
 
@@ -79,31 +109,46 @@ async fn handle_request(
     }
 
     let cmd_display = args.join(" ");
+    let log_target = format!("cli/{tool_name}");
 
-    if !state.filter.is_allowed(&args) {
-        let entry = ProxyLogEntry::new("gh", "denied", &cmd_display);
+    if !tool.filter.is_allowed(&args) {
+        let entry = ProxyLogEntry::new(&log_target, "denied", &cmd_display);
         let _ = state.logger.log(&entry).await;
-        eprintln!("[gh] DENIED: {cmd_display}");
+        eprintln!("[cli] {tool_name} DENIED: {cmd_display}");
         return Ok(error_response(
             403,
-            &format!("command denied: {cmd_display}"),
+            &format!("command denied: {tool_name} {cmd_display}"),
         ));
     }
 
-    let entry = ProxyLogEntry::new("gh", "allowed", &cmd_display);
+    let entry = ProxyLogEntry::new(&log_target, "allowed", &cmd_display);
     let _ = state.logger.log(&entry).await;
 
-    // Spawn gh with GH_TOKEN from sidecar env
-    let output = tokio::process::Command::new("gh")
-        .args(&args)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .await;
+    // Spawn the tool with only the configured env vars from the sidecar env
+    let mut cmd = tokio::process::Command::new(&tool_name);
+    cmd.args(&args);
+    cmd.env_clear();
+    // Pass through PATH so the binary can be found
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    // Pass through HOME for tools that need config dirs
+    if let Ok(home) = std::env::var("HOME") {
+        cmd.env("HOME", home);
+    }
+    // Pass only the configured env vars
+    for var in &tool.env_vars {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+    // Disable interactive prompts and pagers
+    cmd.env("NO_COLOR", "1");
+    cmd.env("PAGER", "cat");
+    cmd.env("GH_PROMPT_DISABLED", "1");
+    cmd.env("GH_NO_UPDATE_NOTIFIER", "1");
 
-    match output {
+    match cmd.output().await {
         Ok(output) => {
             let stdout = output.stdout;
             let stderr = output.stderr;
@@ -126,8 +171,11 @@ async fn handle_request(
             Ok(builder.body(Full::new(Bytes::from(stdout))).unwrap())
         }
         Err(e) => {
-            eprintln!("[gh] failed to spawn gh: {e}");
-            Ok(error_response(500, &format!("failed to run gh: {e}")))
+            eprintln!("[cli] failed to spawn {tool_name}: {e}");
+            Ok(error_response(
+                500,
+                &format!("failed to run {tool_name}: {e}"),
+            ))
         }
     }
 }
@@ -146,13 +194,25 @@ fn error_response(status: u16, message: &str) -> Response<Full<Bytes>> {
 mod tests {
     use super::*;
 
-    async fn start_gh_proxy(allow: &[&str]) -> u16 {
+    async fn start_cli_proxy(tool_name: &str, allow: &[&str], deny: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
-        let state = Arc::new(GhState {
-            filter: GhCommandFilter::new(&allow.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+        let mut tools = HashMap::new();
+        tools.insert(
+            tool_name.to_string(),
+            CliTool {
+                filter: CommandFilter::new(
+                    &allow.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                    &deny.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                ),
+                env_vars: vec![],
+            },
+        );
+
+        let state = Arc::new(CliState {
+            tools,
             logger: ProxyLogger::new("/dev/null"),
         });
 
@@ -185,13 +245,13 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        panic!("gh proxy did not start");
+        panic!("cli proxy did not start");
     }
 
-    async fn post(port: u16, args: &[&str]) -> (u16, String, String) {
+    async fn post(port: u16, tool: &str, args: &[&str]) -> (u16, String, String) {
         let client = reqwest::Client::new();
         let resp = client
-            .post(format!("http://127.0.0.1:{port}/"))
+            .post(format!("http://127.0.0.1:{port}/{tool}"))
             .json(&serde_json::json!({"args": args}))
             .send()
             .await
@@ -210,25 +270,32 @@ mod tests {
 
     #[tokio::test]
     async fn denied_command_returns_403() {
-        let port = start_gh_proxy(&["pr *"]).await;
-        let (status, _, body) = post(port, &["auth", "token"]).await;
+        let port = start_cli_proxy("gh", &["pr *"], &["auth *", "api"]).await;
+        let (status, _, body) = post(port, "gh", &["auth", "token"]).await;
         assert_eq!(status, 403);
         assert!(body.contains("denied"));
     }
 
     #[tokio::test]
-    async fn api_always_denied() {
-        let port = start_gh_proxy(&["*"]).await;
-        let (status, _, _) = post(port, &["api", "/repos"]).await;
+    async fn deny_overrides_allow() {
+        let port = start_cli_proxy("gh", &["*"], &["api"]).await;
+        let (status, _, _) = post(port, "gh", &["api", "/repos"]).await;
         assert_eq!(status, 403);
     }
 
     #[tokio::test]
+    async fn unknown_tool_returns_404() {
+        let port = start_cli_proxy("gh", &["*"], &[]).await;
+        let (status, _, _) = post(port, "nonexistent", &["help"]).await;
+        assert_eq!(status, 404);
+    }
+
+    #[tokio::test]
     async fn empty_args_returns_400() {
-        let port = start_gh_proxy(&["*"]).await;
+        let port = start_cli_proxy("gh", &["*"], &[]).await;
         let client = reqwest::Client::new();
         let resp = client
-            .post(format!("http://127.0.0.1:{port}/"))
+            .post(format!("http://127.0.0.1:{port}/gh"))
             .json(&serde_json::json!({"args": []}))
             .send()
             .await
@@ -238,25 +305,13 @@ mod tests {
 
     #[tokio::test]
     async fn get_returns_405() {
-        let port = start_gh_proxy(&["*"]).await;
+        let port = start_cli_proxy("gh", &["*"], &[]).await;
         let client = reqwest::Client::new();
         let resp = client
-            .get(format!("http://127.0.0.1:{port}/"))
+            .get(format!("http://127.0.0.1:{port}/gh"))
             .send()
             .await
             .unwrap();
         assert_eq!(resp.status(), 405);
-    }
-
-    #[tokio::test]
-    async fn allowed_command_executes() {
-        let port = start_gh_proxy(&["version"]).await;
-        let (status, exit_code, _body) = post(port, &["version"]).await;
-        // gh may or may not be installed on the test host
-        // If not installed, we get 500; if installed, we get 200
-        assert!(status == 200 || status == 500);
-        if status == 200 {
-            assert_eq!(exit_code, "0");
-        }
     }
 }

@@ -9,15 +9,26 @@ pub struct Config {
     pub proxy: ProxyConfig,
     pub mcp: Option<McpConfig>,
     pub compose: Option<ComposeConfig>,
-    pub gh: Option<GhConfig>,
+    pub cli: Option<CliConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct GhConfig {
-    #[serde(default = "default_gh_listen")]
+pub struct CliConfig {
+    #[serde(default = "default_cli_listen")]
     pub listen: String,
     #[serde(default)]
+    pub tools: Vec<CliToolConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CliToolConfig {
+    pub name: String,
+    #[serde(default)]
     pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -204,7 +215,7 @@ fn default_mcp_auth_dir() -> String {
     "/etc/devg/auth".to_string()
 }
 
-fn default_gh_listen() -> String {
+fn default_cli_listen() -> String {
     "0.0.0.0:3130".to_string()
 }
 
@@ -448,20 +459,35 @@ build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "pro
     }
 
     #[test]
-    fn no_gh_config_is_none() {
+    fn no_cli_config_is_none() {
         let config: Config = toml::from_str("").unwrap();
-        assert!(config.gh.is_none());
+        assert!(config.cli.is_none());
     }
 
     #[test]
-    fn parse_gh_config() {
+    fn parse_cli_config() {
         let toml = r#"
-[gh]
-allow = ["pr *", "issue *", "repo view"]
+[cli]
+
+[[cli.tools]]
+name = "gh"
+allow = ["pr *", "issue *"]
+deny = ["auth *", "api"]
+env = ["GH_TOKEN"]
+
+[[cli.tools]]
+name = "gt"
+allow = ["*"]
+env = ["GH_TOKEN"]
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        let gh = config.gh.unwrap();
-        assert_eq!(gh.listen, "0.0.0.0:3130");
-        assert_eq!(gh.allow, vec!["pr *", "issue *", "repo view"]);
+        let cli = config.cli.unwrap();
+        assert_eq!(cli.listen, "0.0.0.0:3130");
+        assert_eq!(cli.tools.len(), 2);
+        assert_eq!(cli.tools[0].name, "gh");
+        assert_eq!(cli.tools[0].allow, vec!["pr *", "issue *"]);
+        assert_eq!(cli.tools[0].deny, vec!["auth *", "api"]);
+        assert_eq!(cli.tools[0].env, vec!["GH_TOKEN"]);
+        assert_eq!(cli.tools[1].name, "gt");
     }
 }

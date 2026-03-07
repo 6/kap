@@ -57,6 +57,11 @@ allow_tools = ["*"]
 name = "linear"
 allow_tools = ["get_*", "list_*", "search_*", "save_*"]
 
-# gh CLI proxy: credentials stay on sidecar, commands are allowlisted
-[gh]
+# CLI proxy: credentials stay on sidecar, commands are allowlisted
+[cli]
+
+[[cli.tools]]
+name = "gh"
 allow = ["pr *", "issue *", "repo *", "search *", "auth status"]
+deny = ["auth *", "api"]
+env = ["GH_TOKEN"]

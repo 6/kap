@@ -1,17 +1,11 @@
-//! Command allowlist for the gh CLI proxy.
+//! Command allow/deny filtering for CLI proxy.
 //!
-//! `auth` and `api` are always denied (credential leak / raw API access).
-//! User-configured allow list uses prefix/exact matching on space-joined args.
-//! Empty allow list = no commands allowed.
+//! Deny overrides allow (same as domain deny).
+//! Empty allow = no commands allowed.
 
-/// First-arg commands that are always blocked.
-const ALWAYS_DENIED: &[&str] = &["api"];
-
-/// The only `auth` subcommand that is allowed.
-const ALLOWED_AUTH_SUBCOMMANDS: &[&str] = &["status"];
-
-pub struct GhCommandFilter {
+pub struct CommandFilter {
     allow: Vec<CommandPattern>,
+    deny: Vec<CommandPattern>,
 }
 
 enum CommandPattern {
@@ -19,10 +13,11 @@ enum CommandPattern {
     Prefix(String), // "pr *" stores "pr "
 }
 
-impl GhCommandFilter {
-    pub fn new(allow: &[String]) -> Self {
+impl CommandFilter {
+    pub fn new(allow: &[String], deny: &[String]) -> Self {
         Self {
             allow: allow.iter().map(|s| CommandPattern::parse(s)).collect(),
+            deny: deny.iter().map(|s| CommandPattern::parse(s)).collect(),
         }
     }
 
@@ -30,18 +25,15 @@ impl GhCommandFilter {
         if args.is_empty() {
             return false;
         }
-        // Hard deny: blocked top-level commands
-        if ALWAYS_DENIED.contains(&args[0].as_str()) {
+        let joined = args.join(" ");
+        // Deny: exact match on joined string OR prefix match on first arg
+        if self
+            .deny
+            .iter()
+            .any(|p| p.matches(&joined) || p.matches_first_arg(&args[0]))
+        {
             return false;
         }
-        // auth: only specific subcommands are allowed
-        if args[0] == "auth" {
-            let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
-            if !ALLOWED_AUTH_SUBCOMMANDS.contains(&sub) {
-                return false;
-            }
-        }
-        let joined = args.join(" ");
         self.allow.iter().any(|p| p.matches(&joined))
     }
 }
@@ -51,7 +43,6 @@ impl CommandPattern {
         if let Some(prefix) = pattern.strip_suffix(" *") {
             CommandPattern::Prefix(format!("{prefix} "))
         } else if pattern.ends_with('*') {
-            // bare wildcard like "*"
             CommandPattern::Prefix(pattern.strip_suffix('*').unwrap().to_string())
         } else {
             CommandPattern::Exact(pattern.to_string())
@@ -63,10 +54,18 @@ impl CommandPattern {
             CommandPattern::Exact(exact) => command == exact,
             CommandPattern::Prefix(prefix) => {
                 if prefix.is_empty() {
-                    return true; // bare "*" matches everything
+                    return true;
                 }
                 command.starts_with(prefix.as_str()) || command == prefix.trim_end()
             }
+        }
+    }
+
+    /// For deny patterns: an exact pattern like "api" should deny "api anything".
+    fn matches_first_arg(&self, first_arg: &str) -> bool {
+        match self {
+            CommandPattern::Exact(exact) => first_arg == exact,
+            CommandPattern::Prefix(_) => false, // already handled by matches()
         }
     }
 }
@@ -81,14 +80,14 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        let f = GhCommandFilter::new(&s(&["repo view"]));
+        let f = CommandFilter::new(&s(&["repo view"]), &[]);
         assert!(f.is_allowed(&s(&["repo", "view"])));
         assert!(!f.is_allowed(&s(&["repo", "list"])));
     }
 
     #[test]
     fn prefix_match() {
-        let f = GhCommandFilter::new(&s(&["pr *"]));
+        let f = CommandFilter::new(&s(&["pr *"]), &[]);
         assert!(f.is_allowed(&s(&["pr", "view", "123"])));
         assert!(f.is_allowed(&s(&["pr", "list"])));
         assert!(f.is_allowed(&s(&["pr"])));
@@ -96,49 +95,43 @@ mod tests {
     }
 
     #[test]
-    fn star_allows_all_non_denied() {
-        let f = GhCommandFilter::new(&s(&["*"]));
+    fn deny_overrides_allow() {
+        let f = CommandFilter::new(&s(&["*"]), &s(&["auth *", "api"]));
         assert!(f.is_allowed(&s(&["pr", "view"])));
-        assert!(f.is_allowed(&s(&["repo", "list"])));
-        // auth and api still denied
+        assert!(!f.is_allowed(&s(&["auth", "token"])));
+        assert!(!f.is_allowed(&s(&["auth", "login"])));
+        assert!(!f.is_allowed(&s(&["api", "/repos"])));
+    }
+
+    #[test]
+    fn exact_deny_allows_siblings() {
+        let f = CommandFilter::new(&s(&["*"]), &s(&["auth token", "auth login", "api"]));
+        assert!(f.is_allowed(&s(&["auth", "status"])));
         assert!(!f.is_allowed(&s(&["auth", "token"])));
         assert!(!f.is_allowed(&s(&["api", "/repos"])));
     }
 
     #[test]
-    fn auth_mostly_denied() {
-        let f = GhCommandFilter::new(&s(&["*"]));
-        assert!(!f.is_allowed(&s(&["auth", "token"])));
-        assert!(!f.is_allowed(&s(&["auth", "login"])));
-        assert!(!f.is_allowed(&s(&["auth", "setup-git"])));
-        assert!(!f.is_allowed(&s(&["auth", "logout"])));
-        assert!(!f.is_allowed(&s(&["auth"])));
-        // auth status is the only allowed auth subcommand
-        assert!(f.is_allowed(&s(&["auth", "status"])));
-    }
-
-    #[test]
-    fn api_always_denied() {
-        let f = GhCommandFilter::new(&s(&["*"]));
-        assert!(!f.is_allowed(&s(&["api", "/repos/owner/repo"])));
-        assert!(!f.is_allowed(&s(&["api", "graphql"])));
+    fn star_allows_all() {
+        let f = CommandFilter::new(&s(&["*"]), &[]);
+        assert!(f.is_allowed(&s(&["anything"])));
     }
 
     #[test]
     fn empty_allow_denies_all() {
-        let f = GhCommandFilter::new(&[]);
+        let f = CommandFilter::new(&[], &[]);
         assert!(!f.is_allowed(&s(&["pr", "view"])));
     }
 
     #[test]
     fn empty_args_denied() {
-        let f = GhCommandFilter::new(&s(&["*"]));
+        let f = CommandFilter::new(&s(&["*"]), &[]);
         assert!(!f.is_allowed(&[]));
     }
 
     #[test]
-    fn multiple_allow_patterns() {
-        let f = GhCommandFilter::new(&s(&["pr *", "issue *", "repo view"]));
+    fn multiple_patterns() {
+        let f = CommandFilter::new(&s(&["pr *", "issue *", "repo view"]), &[]);
         assert!(f.is_allowed(&s(&["pr", "create"])));
         assert!(f.is_allowed(&s(&["issue", "list"])));
         assert!(f.is_allowed(&s(&["repo", "view"])));

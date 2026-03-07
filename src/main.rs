@@ -1,6 +1,6 @@
 mod check;
+mod cli;
 mod config;
-mod gh;
 mod init;
 mod init_env;
 mod mcp;
@@ -64,6 +64,16 @@ enum Command {
         /// Path to the proxy log
         #[arg(long, default_value = "/var/log/devg/proxy.jsonl")]
         log: String,
+    },
+    /// Forward a CLI command to the devg sidecar proxy (used by shim scripts)
+    #[command(hide = true)]
+    CliShim {
+        /// Tool name (e.g. "gh", "gt")
+        tool: String,
+
+        /// Arguments to pass to the tool
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Generate .devcontainer/.env with host credentials (for initializeCommand)
     InitEnv {
@@ -157,10 +167,10 @@ async fn main() -> anyhow::Result<()> {
                 set.spawn(async move { mcp::run(&mcp_cfg, logger).await });
             }
 
-            if let Some(ref gh_cfg) = cfg.gh {
+            if let Some(ref cli_cfg) = cfg.cli {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
-                let gh_cfg = gh_cfg.clone();
-                set.spawn(async move { gh::run(&gh_cfg, logger).await });
+                let cli_cfg = cli_cfg.clone();
+                set.spawn(async move { cli::run(&cli_cfg, logger).await });
             }
 
             while let Some(result) = set.join_next().await {
@@ -169,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Init { project_dir } => init::run(&project_dir),
+        Command::CliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::InitEnv { project_dir } => init_env::run(&project_dir),
         Command::Status => status::run(),
         Command::Check { proxy, mcp, config } => {
