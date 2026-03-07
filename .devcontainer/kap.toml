@@ -76,6 +76,7 @@ allow = [
 ]
 # deny overrides allow:
 # deny = ["gist.github.com"]
+# Global defaults from ~/.kap/kap.toml are merged automatically.
 
 # --- MCP servers (tool-level filtering for remote MCP) ---
 # Register with `kap mcp add <url>`, then restrict tools:
