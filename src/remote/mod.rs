@@ -29,7 +29,7 @@ pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
     // Install the default crypto provider for rustls
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (cert_pem, key_pem, fingerprint) = auth::load_or_generate_tls(&data_dir)?;
+    let (cert_pem, key_pem, _fingerprint) = auth::load_or_generate_tls(&data_dir)?;
     let _pairing_token = auth::load_or_generate_pairing_token(&data_dir)?;
 
     // Build TLS config
@@ -42,10 +42,10 @@ pub async fn run(listen: &str, data_dir: PathBuf) -> Result<()> {
 
     let listener = TcpListener::bind(listen).await?;
     let local_addr = listener.local_addr()?;
+    let port = local_addr.port();
 
     eprintln!("[remote] listening on https://{local_addr}");
-    eprintln!("[remote] cert fingerprint: {fingerprint}");
-    eprintln!("[remote] run `devg remote pair` to get the QR code for iPhone pairing");
+    print_pair(&data_dir, port)?;
 
     loop {
         let (stream, addr) = listener.accept().await?;
