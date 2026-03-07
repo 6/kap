@@ -92,3 +92,7 @@ name = "gh"
 env = ["GH_TOKEN"]
 allow = ["*"]
 deny = ["auth token", "auth login", "auth logout", "auth refresh"]
+
+# Build sidecar from source (dogfooding — uses local code instead of published image)
+[compose]
+build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "proxy" }
