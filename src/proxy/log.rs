@@ -54,6 +54,28 @@ impl ProxyLogger {
 
 const MAX_DENIED_ENTRIES: usize = 100;
 
+/// Parse JSONL log content and return formatted denied entries.
+/// Filters out health-check probes (kap-test.invalid).
+fn parse_denied_entries(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let entry = serde_json::from_str::<serde_json::Value>(line).ok()?;
+            let action = entry.get("action")?.as_str()?;
+            if action != "denied" {
+                return None;
+            }
+            let domain = entry.get("domain")?.as_str()?;
+            if domain == "kap-test.invalid" {
+                return None;
+            }
+            let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
+            let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("?");
+            Some(format!("{ts}  {method:8} {domain}  DENIED"))
+        })
+        .collect()
+}
+
 /// Read and display denied requests from the proxy log.
 pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
     let path = Path::new(log_path);
@@ -63,26 +85,8 @@ pub async fn why_denied(log_path: &str, tail: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Collect all denied entries, then show last MAX_DENIED_ENTRIES
-    let file = fs::File::open(path).await?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut entries: Vec<String> = Vec::new();
-
-    while let Some(line) = lines.next_line().await? {
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
-            let action = entry.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            if action == "denied" {
-                let domain = entry.get("domain").and_then(|v| v.as_str()).unwrap_or("?");
-                if domain == "kap-test.invalid" {
-                    continue;
-                }
-                let ts = entry.get("ts").and_then(|v| v.as_str()).unwrap_or("?");
-                let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("?");
-                entries.push(format!("{ts}  {method:8} {domain}  DENIED"));
-            }
-        }
-    }
+    let content = fs::read_to_string(path).await?;
+    let entries = parse_denied_entries(&content);
 
     if entries.is_empty() && !tail {
         println!("No denied requests found in {log_path}");
@@ -230,5 +234,58 @@ mod tests {
         assert!(path.exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_denied_filters_only_denied() {
+        let content = [
+            r#"{"ts":"2026-01-01T00:00:00Z","domain":"a.com","action":"allowed","method":"GET"}"#,
+            r#"{"ts":"2026-01-01T00:00:01Z","domain":"b.com","action":"denied","method":"CONNECT"}"#,
+            r#"{"ts":"2026-01-01T00:00:02Z","domain":"c.com","action":"observed","method":"GET"}"#,
+        ]
+        .join("\n");
+        let entries = parse_denied_entries(&content);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].contains("b.com"));
+    }
+
+    #[test]
+    fn parse_denied_skips_health_check() {
+        let content = r#"{"ts":"2026-01-01T00:00:00Z","domain":"kap-test.invalid","action":"denied","method":"CONNECT"}"#;
+        let entries = parse_denied_entries(content);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_denied_handles_empty_and_malformed() {
+        assert!(parse_denied_entries("").is_empty());
+        assert!(parse_denied_entries("not json\n{}\n").is_empty());
+    }
+
+    #[test]
+    fn max_denied_entries_limit() {
+        // Generate more than MAX_DENIED_ENTRIES denied entries
+        let lines: Vec<String> = (0..150)
+            .map(|i| {
+                format!(
+                    r#"{{"ts":"2026-01-01T00:00:{:02}Z","domain":"d{i}.com","action":"denied","method":"CONNECT"}}"#,
+                    i % 60
+                )
+            })
+            .collect();
+        let content = lines.join("\n");
+        let entries = parse_denied_entries(&content);
+        assert_eq!(entries.len(), 150);
+
+        // Verify the limit logic (last MAX_DENIED_ENTRIES shown)
+        let total = entries.len();
+        let shown: Vec<_> = entries
+            .iter()
+            .skip(total.saturating_sub(MAX_DENIED_ENTRIES))
+            .collect();
+        assert_eq!(shown.len(), MAX_DENIED_ENTRIES);
+        // First shown entry should be #50 (skipping 0-49)
+        assert!(shown[0].contains("d50.com"));
+        assert!(shown[99].contains("d149.com"));
     }
 }

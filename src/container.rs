@@ -31,14 +31,13 @@ pub fn up(reset: bool) -> Result<()> {
     }
 
     // Clear proxy logs on reset (the volume persists across container recreates)
-    if reset
-        && let Some(sidecar) = find_sidecar() {
-            let _ = Command::new("docker")
-                .args(["exec", &sidecar, "sh", "-c", "rm -f /var/log/kap/*.jsonl"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+    if reset && let Some(sidecar) = find_sidecar() {
+        let _ = Command::new("docker")
+            .args(["exec", &sidecar, "sh", "-c", "rm -f /var/log/kap/*.jsonl"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 
     // Show health checks after successful start
     println!();
