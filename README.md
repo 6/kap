@@ -137,22 +137,22 @@ graph LR
     App -- "gh, aws, ..." --> CLI --> APIs
 ```
 
-- The app container has **no external network route** (Docker `internal: true`, no default gateway). All traffic goes through the sidecar.
+- The app container has **no external network route**. All traffic goes through the sidecar.
 - DNS queries only resolve allowed domains. Disallowed domains get NXDOMAIN.
-- Blocked domain requests get a 403. Blocked MCP tool calls get a JSON-RPC error.
-- **Credentials never enter the app container.** OAuth tokens, API keys, and GH_TOKEN live on the sidecar only.
+- Blocked requests get a 403 (domains) or JSON-RPC error (MCP tools).
+- **Credentials never enter the app container.**
 
 ## Security model
 
-Network isolation is **kernel-enforced**, not proxy-based. The Docker `internal: true` network has no default gateway, so the app container has no IP route to the outside world. Unsetting `HTTP_PROXY` or making direct TCP connections doesn't bypass it. Packets have nowhere to go. The only reachable host is the proxy sidecar on the internal network.
+Network isolation is **kernel-enforced**, not proxy-based. The Docker `internal: true` network has no default gateway, so the app container has no IP route to the outside world. Unsetting `HTTP_PROXY` or making direct TCP connections doesn't bypass it. The only reachable host is the sidecar.
 
-MCP server domains are intentionally **not** in the domain allowlist. The agent can only reach them through kap's MCP proxy, which enforces tool filtering. Connecting directly would be blocked by the network.
+MCP server domains are intentionally **not** in the domain allowlist. The agent can only reach them through the MCP proxy, which enforces tool filtering.
 
 **Known limitations:**
 
 - **Domain fronting**: a CONNECT request to an allowed CDN domain could route to an attacker's backend via SNI/Host manipulation. kap sees the CONNECT domain, not the backend.
 - **Container escape**: a kernel exploit that breaks out of the container bypasses all isolation. Not specific to kap. Running Docker inside a VM (e.g., Docker Desktop, Firecracker) adds defense-in-depth.
-- **No TLS inspection**: for HTTPS, kap sees `CONNECT domain:443` but cannot inspect request paths, headers, or bodies inside the tunnel. A process with valid credentials for an allowed domain can do anything that domain permits.
+- **No TLS inspection**: kap controls which domains are reachable, not what happens on them. It does not MITM HTTPS traffic. Once a domain is allowed, the agent has full access to that domain's API.
 
 ## Commands
 

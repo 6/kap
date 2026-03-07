@@ -23,6 +23,85 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    // -- Lifecycle --
+    /// Scaffold devcontainer files into a project
+    #[command(display_order = 1)]
+    Init {
+        /// Project directory
+        #[arg(short, long, default_value = ".")]
+        project_dir: String,
+
+        /// Skip confirmation prompts
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Start the devcontainer
+    #[command(display_order = 2)]
+    Up {
+        /// Remove and recreate the container from scratch
+        #[arg(long)]
+        reset: bool,
+    },
+    /// Stop and remove the devcontainer
+    #[command(display_order = 3)]
+    Down {
+        /// Project name (from `kap list`). Default: current directory.
+        project: Option<String>,
+
+        /// Also remove named volumes
+        #[arg(short, long)]
+        volumes: bool,
+    },
+    /// Run a command in the devcontainer (default: interactive shell)
+    #[command(display_order = 4)]
+    Exec {
+        /// Project name (from `kap list`). Omit to use current directory.
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Command and arguments to run
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        cmd: Vec<String>,
+    },
+    /// List running devcontainers
+    #[command(display_order = 5)]
+    List {
+        /// Show CPU and memory usage
+        #[arg(short, long)]
+        stats: bool,
+    },
+
+    // -- Diagnostics --
+    /// Check if kap is working (runs checks via docker exec)
+    #[command(display_order = 10)]
+    Status,
+    /// Show denied requests from the proxy log
+    #[command(display_order = 11)]
+    WhyDenied {
+        /// Stream new denials as they happen
+        #[arg(long)]
+        tail: bool,
+
+        /// Path to the proxy log
+        #[arg(long, default_value = "/var/log/kap/proxy.jsonl")]
+        log: String,
+    },
+
+    // -- Subsystems --
+    /// Manage MCP server registrations
+    #[command(display_order = 20)]
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Remote access for monitoring and steering from your phone
+    #[command(display_order = 21)]
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+
+    // -- Hidden (sidecar internals) --
     /// Check proxy health (runs inside the sidecar)
     #[command(hide = true)]
     SidecarCheck {
@@ -48,52 +127,12 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Stop and remove the devcontainer
-    Down {
-        /// Project name (from `kap list`). Default: current directory.
-        project: Option<String>,
-
-        /// Also remove named volumes
-        #[arg(short, long)]
-        volumes: bool,
-    },
-    /// Run a command in the devcontainer (default: interactive shell)
-    Exec {
-        /// Project name (from `kap list`). Omit to use current directory.
-        #[arg(short, long)]
-        project: Option<String>,
-
-        /// Command and arguments to run
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        cmd: Vec<String>,
-    },
-    /// Scaffold devcontainer files into a project
-    Init {
-        /// Project directory
-        #[arg(short, long, default_value = ".")]
-        project_dir: String,
-
-        /// Skip confirmation prompts
-        #[arg(short, long)]
-        yes: bool,
-    },
     /// Regenerate overlay, .env, and shims (runs as initializeCommand)
     #[command(hide = true)]
     SidecarInit {
         /// Project directory containing .devcontainer/
         #[arg(short, long, default_value = ".")]
         project_dir: String,
-    },
-    /// List running devcontainers
-    List {
-        /// Show CPU and memory usage
-        #[arg(short, long)]
-        stats: bool,
-    },
-    /// Manage MCP server registrations
-    Mcp {
-        #[command(subcommand)]
-        command: McpCommand,
     },
     /// Start the forward proxy (runs inside the sidecar)
     #[command(hide = true)]
@@ -105,29 +144,6 @@ enum Command {
         /// Path to config file
         #[arg(short, long, default_value = "/etc/kap/config.toml")]
         config: String,
-    },
-    /// Remote access for monitoring and steering from your phone
-    Remote {
-        #[command(subcommand)]
-        command: RemoteCommand,
-    },
-    /// Check if kap is working (runs checks via docker exec)
-    Status,
-    /// Start the devcontainer
-    Up {
-        /// Remove and recreate the container from scratch
-        #[arg(long)]
-        reset: bool,
-    },
-    /// Show denied requests from the proxy log
-    WhyDenied {
-        /// Stream new denials as they happen
-        #[arg(long)]
-        tail: bool,
-
-        /// Path to the proxy log
-        #[arg(long, default_value = "/var/log/kap/proxy.jsonl")]
-        log: String,
     },
 }
 
