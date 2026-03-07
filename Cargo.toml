@@ -1,6 +1,6 @@
 [package]
 name = "devcontainer-guard"
-version = "0.0.1-pre1"
+version = "0.0.1-pre2"
 edition = "2024"
 description = "Network and MCP access control for devcontainers"
 license = "MIT"
