@@ -9,6 +9,31 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+const GH_SHIM_SCRIPT: &str = r#"#!/bin/sh
+# gh shim - forwards commands to devg sidecar (credentials stay on sidecar)
+DEVG_HOST="${DEVG_HOST:-172.28.0.3}"
+ARGS='['
+SEP=''
+for arg in "$@"; do
+  escaped=$(printf '%s' "$arg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  ARGS="${ARGS}${SEP}\"${escaped}\""
+  SEP=','
+done
+ARGS="$ARGS]"
+HDRS=$(mktemp)
+trap "rm -f $HDRS" EXIT
+BODY=$(curl -s --noproxy '*' -D "$HDRS" \
+  -X POST "http://${DEVG_HOST}:3130/" \
+  -H "Content-Type: application/json" \
+  -d "{\"args\":${ARGS}}" \
+  --max-time 120)
+EXIT_CODE=$(grep -i x-exit-code "$HDRS" | tr -d '\r' | awk '{print $2}')
+STDERR_B64=$(grep -i x-stderr "$HDRS" | tr -d '\r' | awk '{print $2}')
+[ -n "$STDERR_B64" ] && printf '%s' "$STDERR_B64" | base64 -d >&2
+printf '%s' "$BODY"
+exit "${EXIT_CODE:-1}"
+"#;
+
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
@@ -78,11 +103,25 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     let config: crate::config::Config =
         toml::from_str(&content).with_context(|| format!("parsing {}", config_path.display()))?;
     let compose_config = config.compose.unwrap_or_default();
+    let has_gh = config.gh.is_some();
 
-    let overlay = crate::init::generate_overlay(&service_name, &compose_config);
+    let overlay = crate::init::generate_overlay(&service_name, &compose_config, has_gh);
     std::fs::write(&overlay_path, &overlay)
         .with_context(|| format!("writing {}", overlay_path.display()))?;
     eprintln!("[init-env] regenerated {}", crate::init::OVERLAY_FILENAME);
+
+    // Write gh shim script when [gh] is configured
+    if has_gh {
+        let shim_path = devcontainer_dir.join("gh-shim.sh");
+        std::fs::write(&shim_path, GH_SHIM_SCRIPT)
+            .with_context(|| format!("writing {}", shim_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))?;
+        }
+        eprintln!("[init-env] wrote gh-shim.sh");
+    }
 
     Ok(())
 }
@@ -125,6 +164,11 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
                 extract_env_refs(value, &mut vars);
             }
         }
+    }
+
+    // [gh] needs GH_TOKEN on the sidecar
+    if config.gh.is_some() {
+        vars.push("GH_TOKEN".to_string());
     }
 
     vars.sort();

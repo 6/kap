@@ -5,11 +5,17 @@ COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 RUN cargo build --release && cp target/release/devg /usr/local/bin/devg
 
-# Proxy sidecar: minimal image with just the devg binary.
-# Runs domain proxy (:3128), DNS forwarder (:53), and MCP proxy (:3129).
+# Proxy sidecar: devg binary + gh CLI.
+# Runs domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129), gh proxy (:3130).
 FROM debian:bookworm-slim AS proxy
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates curl \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/devg /usr/local/bin/devg
 RUN mkdir -p /var/log/devg

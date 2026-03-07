@@ -56,3 +56,7 @@ allow_tools = ["*"]
 [[mcp.servers]]
 name = "linear"
 allow_tools = ["get_*", "list_*", "search_*", "save_*"]
+
+# gh CLI proxy: credentials stay on sidecar, commands are allowlisted
+[gh]
+allow = ["pr *", "issue *", "repo *", "search *", "auth status"]

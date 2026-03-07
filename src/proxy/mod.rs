@@ -25,6 +25,16 @@ struct ProxyState {
 }
 
 pub async fn run(config: Config, observe: bool, allowlist: Arc<Allowlist>) -> Result<()> {
+    let listener = TcpListener::bind(&config.proxy.listen).await?;
+    run_with_listener(config, observe, allowlist, listener).await
+}
+
+async fn run_with_listener(
+    config: Config,
+    observe: bool,
+    allowlist: Arc<Allowlist>,
+    listener: TcpListener,
+) -> Result<()> {
     let logger = ProxyLogger::new(&config.proxy.observe.log);
 
     let state = Arc::new(ProxyState {
@@ -33,8 +43,7 @@ pub async fn run(config: Config, observe: bool, allowlist: Arc<Allowlist>) -> Re
         observe,
     });
 
-    let listen_addr = &config.proxy.listen;
-    let listener = TcpListener::bind(listen_addr).await?;
+    let listen_addr = listener.local_addr()?;
     eprintln!("[proxy] listening on {listen_addr}");
     if observe {
         eprintln!("[proxy] OBSERVE MODE: all traffic allowed, logging domains");
@@ -236,7 +245,6 @@ mod tests {
     async fn start_proxy(allow: &[&str], deny: &[&str], observe: bool) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let mut config = Config::default();
         config.proxy.listen = format!("127.0.0.1:{port}");
@@ -250,9 +258,10 @@ mod tests {
         ));
 
         tokio::spawn(async move {
-            let _ = run(config, observe, allowlist).await;
+            let _ = run_with_listener(config, observe, allowlist, listener).await;
         });
 
+        // Listener is already bound, just wait for accept loop to start
         for _ in 0..100 {
             if TcpStream::connect(format!("127.0.0.1:{port}"))
                 .await

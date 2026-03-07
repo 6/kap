@@ -9,6 +9,15 @@ pub struct Config {
     pub proxy: ProxyConfig,
     pub mcp: Option<McpConfig>,
     pub compose: Option<ComposeConfig>,
+    pub gh: Option<GhConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GhConfig {
+    #[serde(default = "default_gh_listen")]
+    pub listen: String,
+    #[serde(default)]
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -193,6 +202,10 @@ fn default_mcp_listen() -> String {
 
 fn default_mcp_auth_dir() -> String {
     "/etc/devg/auth".to_string()
+}
+
+fn default_gh_listen() -> String {
+    "0.0.0.0:3130".to_string()
 }
 
 fn default_observe_log() -> String {
@@ -432,5 +445,23 @@ build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "pro
         assert!(yaml.contains("      context: .."));
         assert!(yaml.contains("      dockerfile: .devcontainer/Dockerfile"));
         assert!(yaml.contains("      target: proxy"));
+    }
+
+    #[test]
+    fn no_gh_config_is_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.gh.is_none());
+    }
+
+    #[test]
+    fn parse_gh_config() {
+        let toml = r#"
+[gh]
+allow = ["pr *", "issue *", "repo view"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let gh = config.gh.unwrap();
+        assert_eq!(gh.listen, "0.0.0.0:3130");
+        assert_eq!(gh.allow, vec!["pr *", "issue *", "repo view"]);
     }
 }

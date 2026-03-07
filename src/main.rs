@@ -1,5 +1,6 @@
 mod check;
 mod config;
+mod gh;
 mod init;
 mod init_env;
 mod mcp;
@@ -143,15 +144,27 @@ async fn main() -> anyhow::Result<()> {
             ));
 
             let proxy_fut = proxy::run(cfg.clone(), observe, allowlist.clone());
-            let dns_fut =
-                proxy::dns::run(&cfg.proxy.dns_listen, &cfg.proxy.dns_upstream, allowlist);
+            let dns_listen = cfg.proxy.dns_listen.clone();
+            let dns_upstream = cfg.proxy.dns_upstream.clone();
+
+            let mut set = tokio::task::JoinSet::new();
+            set.spawn(proxy_fut);
+            set.spawn(async move { proxy::dns::run(&dns_listen, &dns_upstream, allowlist).await });
 
             if let Some(ref mcp_cfg) = cfg.mcp {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
-                let mcp_fut = mcp::run(mcp_cfg, logger);
-                tokio::try_join!(proxy_fut, dns_fut, mcp_fut)?;
-            } else {
-                tokio::try_join!(proxy_fut, dns_fut)?;
+                let mcp_cfg = mcp_cfg.clone();
+                set.spawn(async move { mcp::run(&mcp_cfg, logger).await });
+            }
+
+            if let Some(ref gh_cfg) = cfg.gh {
+                let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
+                let gh_cfg = gh_cfg.clone();
+                set.spawn(async move { gh::run(&gh_cfg, logger).await });
+            }
+
+            while let Some(result) = set.join_next().await {
+                result??;
             }
             Ok(())
         }
