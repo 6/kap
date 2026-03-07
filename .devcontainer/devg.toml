@@ -11,6 +11,11 @@ allow = [
   "*.crates.io",
   "rustup.rs",
   "*.rust-lang.org",
+  # Node / npm (for Claude Code install)
+  "*.npmjs.org",
+  "*.npmjs.com",
+  "registry.npmjs.org",
+  "storage.googleapis.com",
   # APT
   "*.ubuntu.com",
   "*.debian.org",

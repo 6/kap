@@ -13,9 +13,10 @@ echo 'HISTFILE=/commandhistory/.zsh_history' >> ~/.zshrc
 # Install Claude Code
 if ! command -v claude &>/dev/null; then
   echo "Installing Claude Code..."
+  export PATH="$HOME/.local/bin:$HOME/.claude/bin:$PATH"
   curl -fsSL https://claude.ai/install.sh | bash
-  echo 'export PATH="$HOME/.claude/bin:$PATH"' >> ~/.zshrc
-  echo 'export PATH="$HOME/.claude/bin:$PATH"' >> ~/.bashrc
+  echo 'export PATH="$HOME/.local/bin:$HOME/.claude/bin:$PATH"' >> ~/.zshrc
+  echo 'export PATH="$HOME/.local/bin:$HOME/.claude/bin:$PATH"' >> ~/.bashrc
 fi
 
 echo ""
