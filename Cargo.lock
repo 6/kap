@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "kap"
-version = "0.0.1-pre5"
+version = "0.0.1-pre6"
 dependencies = [
  "anyhow",
  "base64",
