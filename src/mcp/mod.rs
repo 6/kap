@@ -86,7 +86,19 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                         .upstream
                         .clone()
                         .unwrap_or_else(|| auth.upstream.clone());
-                    UpstreamClient::new(upstream, auth, headers, Some(auth_path))
+                    // Merge headers: auth file headers + config headers (config wins)
+                    let mut all_headers: Vec<(String, String)> = auth
+                        .headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    all_headers.extend(headers);
+                    let has_token = !auth.access_token.is_empty();
+                    if has_token {
+                        UpstreamClient::new(upstream, auth, all_headers, Some(auth_path))
+                    } else {
+                        UpstreamClient::with_headers_only(upstream, all_headers)
+                    }
                 }
                 Err(_) if has_headers => {
                     let Some(ref upstream) = server_cfg.upstream else {
@@ -117,43 +129,10 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
                 }
             }
         };
-        let filter = ToolFilter::new(&server_cfg.allow_tools, &server_cfg.deny_tools);
+        let filter = ToolFilter::new(&server_cfg.allow_tools);
 
         eprintln!("[mcp] {} → {}", server_cfg.name, client.upstream_url);
         servers.insert(server_cfg.name.clone(), McpServer { client, filter });
-    }
-
-    // Auto-discover servers from auth files not already in config
-    let config_names: std::collections::HashSet<&str> =
-        config.servers.iter().map(|s| s.name.as_str()).collect();
-    for name in list_auth_files(&config.auth_dir) {
-        if config_names.contains(name.as_str()) {
-            continue;
-        }
-        let auth_path = Path::new(&config.auth_dir).join(format!("{name}.json"));
-        match StoredAuth::load(&auth_path) {
-            Ok(auth) => {
-                let upstream = auth.upstream.clone();
-                // Use headers from auth file if present (static API key auth)
-                let headers: Vec<(String, String)> = auth
-                    .headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                let has_token = !auth.access_token.is_empty();
-                let client = if has_token {
-                    UpstreamClient::new(upstream, auth, headers, Some(auth_path))
-                } else {
-                    UpstreamClient::with_headers_only(upstream, headers)
-                };
-                let filter = ToolFilter::new(&[], &[]);
-                eprintln!("[mcp] {name} → {} (auto-discovered)", client.upstream_url);
-                servers.insert(name, McpServer { client, filter });
-            }
-            Err(e) => {
-                eprintln!("[mcp] skipping {name}: {e}");
-            }
-        }
     }
 
     let state = Arc::new(McpState { servers, logger });
@@ -442,7 +421,7 @@ mod tests {
     }
 
     /// Start the MCP proxy with a given server config, return the proxy port.
-    async fn start_mcp_proxy(upstream_port: u16, allow_tools: &[&str], deny_tools: &[&str]) -> u16 {
+    async fn start_mcp_proxy(upstream_port: u16, allow_tools: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -469,7 +448,6 @@ mod tests {
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>(),
-            &deny_tools.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         );
 
         let mut servers = HashMap::new();
@@ -537,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn tools_list_is_filtered() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["read_file", "search_code"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file", "search_code"]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -555,7 +533,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_allowed_forwards() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -576,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_denied_returns_error() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -601,11 +579,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deny_overrides_allow() {
+    async fn selective_allowlist() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &["delete_*"]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file", "search_*"]).await;
 
-        // read_file should be allowed (matches *)
+        // read_file allowed (exact match)
         let resp = post_jsonrpc(
             proxy_port,
             "test",
@@ -618,7 +596,7 @@ mod tests {
         .await;
         assert!(resp["result"].is_object());
 
-        // delete_file should be denied (deny overrides allow)
+        // delete_file denied (not in allowlist)
         let resp = post_jsonrpc(
             proxy_port,
             "test",
@@ -635,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_server_returns_404() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"]).await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -650,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn get_method_returns_405() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"]).await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -664,7 +642,7 @@ mod tests {
     #[tokio::test]
     async fn empty_path_returns_404() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"]).await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -679,7 +657,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_forwarded() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["*"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["*"]).await;
 
         let client = reqwest::Client::new();
         let resp = client
@@ -695,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_missing_name_denied_when_not_in_allow() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"]).await;
 
         // params has no "name" → tool_call_name returns None → name is "unknown"
         let resp = post_jsonrpc(
@@ -715,10 +693,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_deny_only() {
+    async fn empty_allow_denies_all_tools() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        // Empty allow = permit all, deny delete_*
-        let proxy_port = start_mcp_proxy(upstream_port, &[], &["delete_*"]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &[]).await;
 
         let resp = post_jsonrpc(
             proxy_port,
@@ -728,9 +705,7 @@ mod tests {
         .await;
 
         let tools = resp["result"]["tools"].as_array().unwrap();
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["read_file", "write_file", "search_code"]);
-        assert!(!names.contains(&"delete_file"));
+        assert!(tools.is_empty());
     }
 
     #[test]
@@ -750,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn non_tool_methods_forwarded_transparently() {
         let (upstream_port, _handle) = start_mock_upstream().await;
-        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"], &[]).await;
+        let proxy_port = start_mcp_proxy(upstream_port, &["read_file"]).await;
 
         let resp = post_jsonrpc(
             proxy_port,

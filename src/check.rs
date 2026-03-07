@@ -19,18 +19,9 @@ pub async fn run_mcp(config_path: &str) -> Result<()> {
     let http = reqwest::Client::new();
     let mcp_base = "http://127.0.0.1:3129";
 
-    // Collect server names from config + auto-discovered auth files
-    let mut server_names: Vec<String> = mcp.servers.iter().map(|s| s.name.clone()).collect();
-    let config_names: std::collections::HashSet<&str> =
-        mcp.servers.iter().map(|s| s.name.as_str()).collect();
-    for name in crate::mcp::list_auth_files(&mcp.auth_dir) {
-        if !config_names.contains(name.as_str()) {
-            server_names.push(name);
-        }
-    }
-
     let mut set = tokio::task::JoinSet::new();
-    for name in server_names {
+    for server in &mcp.servers {
+        let name = server.name.clone();
         let http = http.clone();
         let url = format!("{mcp_base}/{name}");
         set.spawn(async move {

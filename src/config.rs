@@ -68,18 +68,14 @@ impl Config {
         &self.proxy.network.allow
     }
 
-    /// Collect domains from MCP server upstream URLs (config, auth files, and auto-discovered).
+    /// Collect domains from MCP server upstream URLs (from config and auth files).
     /// These are implicitly allowed so the MCP proxy can reach its upstreams.
     pub fn mcp_upstream_domains(&self) -> Vec<String> {
         let Some(ref mcp) = self.mcp else {
             return Vec::new();
         };
         let auth_dir = &mcp.auth_dir;
-        let config_names: std::collections::HashSet<&str> =
-            mcp.servers.iter().map(|s| s.name.as_str()).collect();
-
-        let mut domains: Vec<String> = mcp
-            .servers
+        mcp.servers
             .iter()
             .filter_map(|s| {
                 // Try config upstream first, then fall back to auth file
@@ -91,31 +87,7 @@ impl Config {
                     .and_then(|u| url::Url::parse(&u).ok())
                     .and_then(|u| u.host_str().map(String::from))
             })
-            .collect();
-
-        // Auto-discovered servers from auth files not in config
-        if let Ok(entries) = std::fs::read_dir(auth_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                if config_names.contains(name) {
-                    continue;
-                }
-                if let Some(domain) = upstream_from_auth_file(auth_dir, name)
-                    .and_then(|u| url::Url::parse(&u).ok())
-                    .and_then(|u| u.host_str().map(String::from))
-                {
-                    domains.push(domain);
-                }
-            }
-        }
-
-        domains
+            .collect()
     }
 }
 
@@ -161,8 +133,6 @@ pub struct McpServerConfig {
     pub headers: HashMap<String, String>,
     #[serde(default)]
     pub allow_tools: Vec<String>,
-    #[serde(default)]
-    pub deny_tools: Vec<String>,
 }
 
 /// Read the upstream URL from an auth file.
@@ -288,7 +258,6 @@ auth_dir = "/tmp/auth"
 name = "github"
 upstream = "https://mcp.github.com"
 allow_tools = ["get_pull_request", "list_issues"]
-deny_tools = ["create_repository"]
 
 [[mcp.servers]]
 name = "filesystem"
@@ -309,7 +278,6 @@ upstream = "https://mcp.example.com/fs"
             mcp.servers[0].allow_tools,
             vec!["get_pull_request", "list_issues"]
         );
-        assert_eq!(mcp.servers[0].deny_tools, vec!["create_repository"]);
 
         assert_eq!(mcp.servers[1].name, "filesystem");
         assert!(mcp.servers[1].allow_tools.is_empty());

@@ -46,8 +46,13 @@ build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "pro
 # Servers registered via `devg mcp add` are auto-discovered from ~/.devg/auth/
 # Add a [[mcp.servers]] entry only to restrict tools:
 
-# context7 is auto-discovered from ~/.devg/auth/context7.json
-# linear is auto-discovered from ~/.devg/auth/linear.json; restrict destructive tools
+# Auth comes from ~/.devg/auth/ (via `devg mcp add`)
+# Just list the name + allowed tools here.
+
+[[mcp.servers]]
+name = "context7"
+allow_tools = ["*"]
+
 [[mcp.servers]]
 name = "linear"
-deny_tools = ["delete_*"]
+allow_tools = ["get_*", "list_*", "search_*", "save_*"]

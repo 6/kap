@@ -79,7 +79,7 @@ pub async fn add(name: &str, upstream: &str, reauth: bool, headers: &[String]) -
     eprintln!();
     eprintln!("  [[mcp.servers]]");
     eprintln!("  name = \"{name}\"");
-    eprintln!("  deny_tools = [\"delete_*\"]");
+    eprintln!("  allow_tools = [\"*\"]");
     eprintln!();
 
     Ok(())

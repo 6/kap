@@ -104,15 +104,11 @@ pub fn run() -> Result<()> {
     }
 
     // MCP checks
-    let host_auth_dir = crate::mcp::auth::host_auth_dir();
-    let available = crate::mcp::list_auth_files(&host_auth_dir);
-    let has_mcp = config
-        .mcp
-        .as_ref()
-        .is_some_and(|m| !m.servers.is_empty() || !available.is_empty());
     if let Some(ref mcp) = config.mcp
-        && has_mcp
+        && !mcp.servers.is_empty()
     {
+        let host_auth_dir = crate::mcp::auth::host_auth_dir();
+        let available = crate::mcp::list_auth_files(&host_auth_dir);
         // Pre-flight: validate credentials for all project MCP servers
         for server in &mcp.servers {
             if let Some(ref env_var) = server.token_env {

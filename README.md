@@ -69,19 +69,25 @@ devg mcp get linear    # show details + tools list
 
 Registered servers are **auto-discovered** — they're proxied automatically without any config in `devg.toml`. The agent connects to `http://172.28.0.3:3129/linear` instead of the real server. devg forwards requests with the stored auth.
 
-### Tool filtering
+### Tool allowlist
 
-Add a `[[mcp.servers]]` entry in `devg.toml` only when you need to restrict tools:
+Each server needs a `[[mcp.servers]]` entry in `devg.toml` with an explicit `allow_tools` list. Same model as the domain allowlist — only what's listed is permitted:
 
 ```toml
 [mcp]
 
+# Allow all tools
+[[mcp.servers]]
+name = "context7"
+allow_tools = ["*"]
+
+# Allow only read/search operations
 [[mcp.servers]]
 name = "github"
-deny_tools = ["create_repository", "delete_repository"]
+allow_tools = ["get_*", "list_*", "search_*"]
 ```
 
-No `upstream` needed — it's read from the auth file. You can also use `allow_tools` for an allowlist instead.
+No `upstream` needed — it's read from the auth file. Wildcards work the same as domain patterns (`get_*` matches `get_issue`, `get_user`, etc.).
 
 ### Non-OAuth auth
 
