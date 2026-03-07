@@ -10,6 +10,7 @@ allow = [
   "crates.io",
   "*.crates.io",
   "rustup.rs",
+  "*.rustup.rs",
   "*.rust-lang.org",
   # Node / npm
   "*.npmjs.org",
