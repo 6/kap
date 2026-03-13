@@ -162,10 +162,16 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         == 0
 }
 
-/// Detect the local WiFi IP address.
+/// Detect the local LAN IP address reachable by devices on the same WiFi.
+/// Prefers broadcast-capable interfaces (en0, etc.) over VPN tunnels (utun*),
+/// which have point-to-point addresses only routable through the VPN.
 pub fn local_ip() -> Option<String> {
-    // Bind a UDP socket and connect to a known address to determine
-    // which local interface would be used for LAN traffic.
+    // First try: enumerate interfaces and pick a private, non-loopback,
+    // broadcast-capable (i.e. not point-to-point) IPv4 address.
+    if let Some(ip) = lan_ip_from_interfaces() {
+        return Some(ip);
+    }
+    // Fallback: UDP connect trick (may pick VPN address if VPN is active).
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     let addr = socket.local_addr().ok()?;
@@ -174,6 +180,61 @@ pub fn local_ip() -> Option<String> {
         return None;
     }
     Some(ip.to_string())
+}
+
+/// Enumerate network interfaces via getifaddrs, return the first private IPv4
+/// address on a non-loopback, non-point-to-point (broadcast-capable) interface.
+fn lan_ip_from_interfaces() -> Option<String> {
+    use std::net::Ipv4Addr;
+
+    unsafe {
+        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifaddrs) != 0 {
+            return None;
+        }
+
+        let mut result = None;
+        let mut cur = ifaddrs;
+        while !cur.is_null() {
+            let ifa = &*cur;
+            cur = ifa.ifa_next;
+
+            // Skip if no address
+            if ifa.ifa_addr.is_null() {
+                continue;
+            }
+
+            // IPv4 only
+            if (*ifa.ifa_addr).sa_family as i32 != libc::AF_INET {
+                continue;
+            }
+
+            let flags = ifa.ifa_flags as i32;
+
+            // Skip loopback and down interfaces
+            if flags & libc::IFF_LOOPBACK != 0 || flags & libc::IFF_UP == 0 {
+                continue;
+            }
+
+            // Skip point-to-point (VPN tunnels like utun*)
+            if flags & libc::IFF_POINTOPOINT != 0 {
+                continue;
+            }
+
+            let sockaddr = ifa.ifa_addr as *const libc::sockaddr_in;
+            let ip_bytes = (*sockaddr).sin_addr.s_addr.to_ne_bytes();
+            let ip = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+
+            // Only private addresses
+            if ip.is_private() && !ip.is_loopback() {
+                result = Some(ip.to_string());
+                break;
+            }
+        }
+
+        libc::freeifaddrs(ifaddrs);
+        result
+    }
 }
 
 /// Render a QR code to the terminal.
@@ -334,6 +395,17 @@ mod tests {
         if let Some(ref ip) = ip {
             assert!(!ip.is_empty());
             assert!(!ip.starts_with("127."));
+        }
+    }
+
+    #[test]
+    fn lan_ip_skips_vpn_tunnel() {
+        // lan_ip_from_interfaces should return a broadcast-capable LAN address,
+        // not a point-to-point VPN tunnel address.
+        if let Some(ip) = lan_ip_from_interfaces() {
+            let addr: std::net::Ipv4Addr = ip.parse().unwrap();
+            assert!(addr.is_private());
+            assert!(!addr.is_loopback());
         }
     }
 }
