@@ -38,7 +38,7 @@ pub fn up(reset: bool) -> Result<()> {
         .context("running devcontainer up")?;
 
     if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+        anyhow::bail!("devcontainer up failed (exit code {})", status.code().unwrap_or(1));
     }
 
     // Clear proxy logs on reset (the volume persists across container recreates)
@@ -79,7 +79,7 @@ pub fn down(project: Option<String>, volumes: bool) -> Result<()> {
         .context("running docker compose down")?;
 
     if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+        anyhow::bail!("docker compose down failed (exit code {})", status.code().unwrap_or(1));
     }
 
     Ok(())
@@ -115,7 +115,7 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
         .context("running devcontainer exec")?;
 
     if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+        anyhow::bail!("devcontainer exec failed (exit code {})", status.code().unwrap_or(1));
     }
 
     Ok(())

@@ -1,18 +1,5 @@
-mod check;
-mod cli;
-mod config;
-mod container;
-mod dev;
-mod init;
-mod init_env;
-mod mcp;
-mod mcp_cmd;
-mod proxy;
-mod reload;
-mod remote;
-mod status;
-
 use clap::{Parser, Subcommand};
+use kap::{check, cli, container, dev, init, init_env, mcp, mcp_cmd, proxy, reload, remote, status};
 
 #[derive(Parser)]
 #[command(name = "kap", version, about = "Run AI agents in secure capsules")]
@@ -249,13 +236,11 @@ async fn main() -> anyhow::Result<()> {
             McpCommand::Remove { name } => mcp_cmd::remove(&name),
         },
         Command::SidecarProxy { observe, config } => {
-            // Retry config loading — Docker Desktop macOS bind mounts can be
-            // temporarily unavailable when the container first starts.
             let cfg = {
                 let mut last_err = None;
                 let mut loaded = None;
                 for attempt in 0..5 {
-                    match config::Config::load(&config) {
+                    match kap::config::Config::load(&config) {
                         Ok(c) if !c.allow_domains().is_empty() || attempt == 4 => {
                             loaded = Some(c);
                             break;
@@ -287,7 +272,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            // Build shared state for hot-reload
             let mcp_domains = cfg.mcp_upstream_domains();
             let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();
             all_allow.extend(mcp_domains);
@@ -298,7 +282,6 @@ async fn main() -> anyhow::Result<()> {
             let shared_cli = reload::new_shared(reload::CliTools::from_config(&cfg));
             let shared_mcp = reload::new_shared(reload::McpFilters::from_config(&cfg));
 
-            // Write CLI shim scripts to shared volume
             let shim_dir = std::path::PathBuf::from("/opt/kap/bin");
             if let Err(e) = reload::write_shims(&cfg, &shim_dir) {
                 eprintln!("[sidecar] warning: could not write shims: {e}");
@@ -328,7 +311,6 @@ async fn main() -> anyhow::Result<()> {
                 set.spawn(async move { cli::run(cli_tools, logger).await });
             }
 
-            // Spawn config watcher for hot-reload
             {
                 let config_path = config.clone();
                 let al = shared_allowlist.clone();
@@ -365,13 +347,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Up { reset } => container::up(reset),
         Command::WhyDenied { tail, log } => {
             if std::path::Path::new(&log).exists() {
-                // Running inside the container
                 proxy::log::why_denied(&log, tail).await
             } else {
-                // Running on the host, exec into sidecar
                 let mut cmd = std::process::Command::new("docker");
                 cmd.args(["exec", "-t"]);
-                // Find sidecar container
                 let ps = std::process::Command::new("docker")
                     .args(["ps", "--format", "{{.Names}}"])
                     .output()?;
