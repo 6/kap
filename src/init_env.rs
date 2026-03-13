@@ -219,8 +219,13 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
     // CLI tools need their env vars on the sidecar
     if let Some(cli) = &config.cli {
         for tool in &cli.tools {
-            for var in &tool.env {
-                vars.push(var.clone());
+            if tool.env.is_empty() && tool.mode == crate::config::CliToolMode::Direct {
+                // Auto-resolve from DETECTABLE_TOOLS (e.g. gh → GH_TOKEN)
+                vars.extend(crate::init::default_env_for_tool(&tool.name));
+            } else {
+                for var in &tool.env {
+                    vars.push(var.clone());
+                }
             }
         }
     }
@@ -405,6 +410,28 @@ headers = { "X-Key" = "${B_API_KEY}", "X-Other" = "${C_SECRET}" }
 
         let vars = vars_from_config(&path).unwrap();
         assert_eq!(vars, vec!["A_API_KEY", "B_API_KEY", "C_SECRET"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vars_from_config_direct_mode_auto_resolves_env() {
+        let dir = std::env::temp_dir().join(format!("kap-initenv-direct-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("kap.toml");
+        std::fs::write(
+            &path,
+            r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+mode = "direct"
+"#,
+        )
+        .unwrap();
+
+        let vars = vars_from_config(&path).unwrap();
+        assert_eq!(vars, vec!["GH_TOKEN"]); // auto-resolved from DETECTABLE_TOOLS
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
