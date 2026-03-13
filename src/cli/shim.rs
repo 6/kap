@@ -27,7 +27,14 @@ pub async fn run(tool: &str, args: &[String]) -> Result<()> {
     let host = sidecar_host();
     let url = format!("http://{host}:{DEVG_CLI_PORT}/{tool}");
 
-    // Clear proxy env vars so reqwest doesn't route through the HTTP proxy.
+    // Save and clear proxy env vars so reqwest talks directly to the sidecar.
+    // We restore them before exec'ing the real binary in direct mode, since
+    // the tool needs HTTP_PROXY to route through the domain proxy.
+    let saved_proxy: Vec<(String, String)> =
+        ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect();
     // SAFETY: single-threaded shim process.
     unsafe {
         std::env::remove_var("HTTP_PROXY");
@@ -57,7 +64,7 @@ pub async fn run(tool: &str, args: &[String]) -> Result<()> {
         .map(String::from);
 
     if mode.as_deref() == Some("direct") {
-        return run_direct(tool, args, &resp).await;
+        return run_direct(tool, args, &resp, &saved_proxy).await;
     }
 
     // Proxy mode: output stdout/stderr from sidecar response
@@ -95,7 +102,12 @@ pub async fn run(tool: &str, args: &[String]) -> Result<()> {
 
 /// Direct mode: decode env vars from sidecar response, find the real binary,
 /// and exec it (replacing this process).
-async fn run_direct(tool: &str, args: &[String], resp: &reqwest::Response) -> Result<()> {
+async fn run_direct(
+    tool: &str,
+    args: &[String],
+    resp: &reqwest::Response,
+    saved_proxy: &[(String, String)],
+) -> Result<()> {
     // Decode env vars from X-Env header
     let env_vars = resp
         .headers()
@@ -116,10 +128,14 @@ async fn run_direct(tool: &str, args: &[String], resp: &reqwest::Response) -> Re
     // Find the real binary (skip /opt/kap paths to avoid finding our own shim)
     let real_binary = find_real_binary(tool)?;
 
-    // Exec: replace this process with the real binary
+    // Exec: replace this process with the real binary.
+    // Restore proxy env vars so the tool can route through the domain proxy.
     use std::os::unix::process::CommandExt;
     let mut cmd = std::process::Command::new(&real_binary);
     cmd.args(args);
+    for (k, v) in saved_proxy {
+        cmd.env(k, v);
+    }
     for (k, v) in &env_vars {
         cmd.env(k, v);
     }
