@@ -52,7 +52,7 @@ allow = [
 deny = ["gist.github.com"]
 ```
 
-Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win.
+Wildcards (`*.github.com`) match subdomains but not the bare domain. Deny rules always win. Changes to `kap.toml` are hot-reloaded — no container restart needed.
 
 ## Global config
 
@@ -107,23 +107,27 @@ allow = ["get_*", "list_*", "search_*"]
 
 ## CLI proxy
 
-The CLI proxy lets the app container run tools like `gh` or `aws` without direct access to credentials.
+The CLI proxy lets the app container run tools like `gh` or `aws` without direct access to credentials. Two modes:
+
+- **Proxy mode** (default): the sidecar executes the command and returns stdout/stderr. Credentials never enter the app container. Use `allow`/`deny` to restrict subcommands.
+- **Direct mode**: the sidecar sends credentials to the app container, which runs the command locally. Needed for commands that write files (e.g. `gh run download`). The tool must be installed in the app container.
 
 ```toml
 [cli]
 
-[[cli.tools]]
-name = "gh"
-allow = ["pr *", "issue *", "repo *", "search *", "auth status"]
-env = ["GH_TOKEN"]
-
+# Proxy mode: sidecar executes, credentials stay isolated
 [[cli.tools]]
 name = "aws"
 allow = ["s3 ls *", "s3 cp *", "sts get-caller-identity"]
 env = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+
+# Direct mode: runs locally in the app container
+[[cli.tools]]
+name = "gh"
+mode = "direct"
 ```
 
-`deny` overrides `allow`. Tools must be installed on the sidecar (`gh` is included by default; add others via `[compose] build`).
+In proxy mode, `deny` overrides `allow`. In direct mode, allow/deny are not enforced (the command runs locally). For direct mode, `env` is optional — kap auto-detects env vars for known tools (e.g. `gh` → `GH_TOKEN`).
 
 ## Remote access
 
@@ -177,7 +181,7 @@ graph LR
 - The app container has **no external network route**. All traffic goes through the sidecar.
 - DNS queries only resolve allowed domains. Disallowed domains get NXDOMAIN.
 - Blocked requests get a 403 (domains) or JSON-RPC error (MCP tools).
-- **Credentials never enter the app container.**
+- **Credentials never enter the app container** (in proxy mode). Direct mode CLI tools receive credentials at exec time, but the domain proxy still controls what the container can reach.
 
 ## Security model
 
