@@ -105,21 +105,11 @@ async fn handle_request(
     let cmd_display = args.join(" ");
     let log_target = format!("cli/{tool_name}");
 
-    if !tool.filter.is_allowed(&args) {
-        let entry = ProxyLogEntry::new(&log_target, "denied", &cmd_display);
-        let _ = state.logger.log(&entry).await;
-        eprintln!("[cli] {tool_name} DENIED: {cmd_display}");
-        return Ok(error_response(
-            403,
-            &format!("command denied: {tool_name} {cmd_display}"),
-        ));
-    }
-
-    let entry = ProxyLogEntry::new(&log_target, "allowed", &cmd_display);
-    let _ = state.logger.log(&entry).await;
-
-    // Direct mode: return env vars, let the shim exec the real binary
+    // Direct mode: skip allow/deny filtering (the sidecar isn't executing anything,
+    // just returning credentials so the shim can exec the real binary locally)
     if tool.mode == CliToolMode::Direct {
+        let entry = ProxyLogEntry::new(&log_target, "direct", &cmd_display);
+        let _ = state.logger.log(&entry).await;
         let env_pairs: Vec<String> = tool
             .env_vars
             .iter()
@@ -134,7 +124,20 @@ async fn handle_request(
         return Ok(builder.body(Full::new(Bytes::new())).unwrap());
     }
 
-    // Proxy mode: execute the command on the sidecar
+    // Proxy mode: check allow/deny filters before executing
+    if !tool.filter.is_allowed(&args) {
+        let entry = ProxyLogEntry::new(&log_target, "denied", &cmd_display);
+        let _ = state.logger.log(&entry).await;
+        eprintln!("[cli] {tool_name} DENIED: {cmd_display}");
+        return Ok(error_response(
+            403,
+            &format!("command denied: {tool_name} {cmd_display}"),
+        ));
+    }
+
+    let entry = ProxyLogEntry::new(&log_target, "allowed", &cmd_display);
+    let _ = state.logger.log(&entry).await;
+
     // Map the app container's workspace path to /workspace on the sidecar
     let cwd = parsed["cwd"]
         .as_str()
