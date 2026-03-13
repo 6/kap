@@ -1,0 +1,120 @@
+/// Development tools for working on kap itself.
+///
+/// `kap dev push` builds a Linux binary from the current source and
+/// deploys it to all running sidecar containers, avoiding the need
+/// to publish a new Docker image for every code change.
+use anyhow::{Context, Result};
+use std::process::Command;
+
+pub fn push() -> Result<()> {
+    // 1. Verify we're in the kap source directory
+    let dockerfile = ".devcontainer/Dockerfile";
+    if !std::path::Path::new(dockerfile).exists() {
+        anyhow::bail!(
+            "No .devcontainer/Dockerfile found. Run `kap dev push` from the kap source directory."
+        );
+    }
+
+    // 2. Build host binary
+    eprintln!("[dev] building host binary...");
+    let status = Command::new("cargo")
+        .args(["install", "--path", "."])
+        .status()
+        .context("failed to run cargo install")?;
+    if !status.success() {
+        anyhow::bail!("cargo install failed");
+    }
+
+    // 3. Build Linux binary via Docker
+    eprintln!("[dev] building Linux binary...");
+    let status = Command::new("docker")
+        .args([
+            "build", "--target", "proxy", "-t", "kap-dev", "-f", dockerfile, ".",
+        ])
+        .status()
+        .context("failed to run docker build")?;
+    if !status.success() {
+        anyhow::bail!("docker build failed");
+    }
+
+    // 4. Extract the Linux binary from the image
+    let tmp_binary = std::env::temp_dir().join("kap-dev-linux");
+    let create_output = Command::new("docker")
+        .args(["create", "kap-dev"])
+        .output()
+        .context("failed to create temp container")?;
+    if !create_output.status.success() {
+        anyhow::bail!("docker create failed");
+    }
+    let container_id = String::from_utf8_lossy(&create_output.stdout)
+        .trim()
+        .to_string();
+
+    let cp_status = Command::new("docker")
+        .args([
+            "cp",
+            &format!("{container_id}:/usr/local/bin/kap"),
+            tmp_binary.to_str().unwrap(),
+        ])
+        .status();
+
+    // Always clean up the temp container
+    let _ = Command::new("docker").args(["rm", &container_id]).output();
+
+    cp_status.context("failed to extract binary from image")?;
+
+    // 5. Find all running kap sidecar containers
+    let sidecars = find_all_sidecars()?;
+    if sidecars.is_empty() {
+        eprintln!("[dev] no running sidecar containers found");
+        return Ok(());
+    }
+
+    // 6. Copy binary + restart each sidecar
+    for sidecar in &sidecars {
+        eprintln!("[dev] deploying to {sidecar}...");
+        let status = Command::new("docker")
+            .args([
+                "cp",
+                tmp_binary.to_str().unwrap(),
+                &format!("{sidecar}:/usr/local/bin/kap"),
+            ])
+            .status()
+            .context("docker cp failed")?;
+        if !status.success() {
+            eprintln!("[dev] warning: failed to copy binary to {sidecar}");
+            continue;
+        }
+
+        let status = Command::new("docker")
+            .args(["restart", sidecar])
+            .status()
+            .context("docker restart failed")?;
+        if !status.success() {
+            eprintln!("[dev] warning: failed to restart {sidecar}");
+        }
+    }
+
+    // Clean up temp binary
+    let _ = std::fs::remove_file(&tmp_binary);
+
+    eprintln!(
+        "[dev] pushed to {} sidecar(s). Run `kap up` in each project to bring app containers back.",
+        sidecars.len()
+    );
+    Ok(())
+}
+
+/// Find all running kap sidecar container names.
+fn find_all_sidecars() -> Result<Vec<String>> {
+    let output = Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+        .context("failed to run docker ps")?;
+    let names = String::from_utf8_lossy(&output.stdout);
+    Ok(names
+        .lines()
+        .filter(|n| n.contains("kap-kap") || n.ends_with("-kap-1"))
+        .map(String::from)
+        .collect())
+}

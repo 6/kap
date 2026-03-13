@@ -2,6 +2,7 @@ mod check;
 mod cli;
 mod config;
 mod container;
+mod dev;
 mod init;
 mod init_env;
 mod mcp;
@@ -103,6 +104,12 @@ enum Command {
         #[command(subcommand)]
         command: RemoteCommand,
     },
+    /// Development tools for working on kap itself
+    #[command(display_order = 22)]
+    Dev {
+        #[command(subcommand)]
+        command: DevCommand,
+    },
 
     // -- Hidden (sidecar internals) --
     /// Check proxy health (runs inside the sidecar)
@@ -167,6 +174,12 @@ enum RemoteCommand {
         /// Device ID to revoke
         device_id: String,
     },
+}
+
+#[derive(Subcommand)]
+enum DevCommand {
+    /// Build and push kap binary to all running sidecar containers
+    Push,
 }
 
 #[derive(Subcommand)]
@@ -345,6 +358,9 @@ async fn main() -> anyhow::Result<()> {
                 RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
             }
         }
+        Command::Dev { command } => match command {
+            DevCommand::Push => dev::push(),
+        },
         Command::Status => status::run(),
         Command::Up { reset } => container::up(reset),
         Command::WhyDenied { tail, log } => {
