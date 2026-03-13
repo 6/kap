@@ -4,9 +4,33 @@
 /// - New project (no .devcontainer/): creates everything from scratch
 /// - Existing project (.devcontainer/ exists): creates kap.toml + overlay compose,
 ///   updates devcontainer.json
-use crate::config::ComposeConfig;
+use crate::config::{CliToolMode, ComposeConfig};
 use anyhow::{Context, Result};
 use std::path::Path;
+
+/// Info needed to generate the overlay for a CLI tool.
+pub struct CliToolOverlay {
+    pub name: String,
+    pub mode: CliToolMode,
+    pub env: Vec<String>,
+}
+
+impl CliToolOverlay {
+    /// Build from a CliToolConfig. For direct-mode tools with no explicit env,
+    /// falls back to DETECTABLE_TOOLS defaults (e.g. gh → GH_TOKEN).
+    pub fn from_config(cfg: &crate::config::CliToolConfig) -> Self {
+        let env = if cfg.env.is_empty() && cfg.mode == CliToolMode::Direct {
+            default_env_for_tool(&cfg.name)
+        } else {
+            cfg.env.clone()
+        };
+        Self {
+            name: cfg.name.clone(),
+            mode: cfg.mode.clone(),
+            env,
+        }
+    }
+}
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.kap.yml";
 
@@ -84,17 +108,28 @@ pub fn derive_subnet(project_dir: &Path) -> String {
 pub fn generate_overlay(
     service_name: &str,
     compose: &ComposeConfig,
-    cli_tools: &[String],
+    cli_tools: &[CliToolOverlay],
     subnet_prefix: &str,
     project_name: &str,
     ssh_auth_sock: Option<&str>,
     global_config: bool,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
+
+    // Split tools by mode
+    let proxy_tools: Vec<&CliToolOverlay> = cli_tools
+        .iter()
+        .filter(|t| t.mode == CliToolMode::Proxy)
+        .collect();
+    let direct_tools: Vec<&CliToolOverlay> = cli_tools
+        .iter()
+        .filter(|t| t.mode == CliToolMode::Direct)
+        .collect();
+
     // CLI tool proxying: inline the shim script via Docker Compose configs so we
     // don't need a separate cli-shim.sh file on disk. One config is mounted at
     // /usr/local/bin/<tool> for each tool (busybox pattern via basename "$0").
-    let (cli_configs_top, cli_configs_svc) = if cli_tools.is_empty() {
+    let (cli_configs_top, cli_configs_svc) = if proxy_tools.is_empty() {
         (String::new(), String::new())
     } else {
         let top = r#"configs:
@@ -105,10 +140,10 @@ pub fn generate_overlay(
 
 "#
         .to_string();
-        let svc: Vec<String> = cli_tools
+        let svc: Vec<String> = proxy_tools
             .iter()
-            .map(|name| {
-                format!("      - source: cli-shim\n        target: /usr/local/bin/{name}\n        mode: 0755")
+            .map(|t| {
+                format!("      - source: cli-shim\n        target: /usr/local/bin/{}\n        mode: 0755", t.name)
             })
             .collect();
         let svc_block = format!("\n    configs:\n{}", svc.join("\n"));
@@ -117,7 +152,7 @@ pub fn generate_overlay(
     // App service volumes: CLI shim binary + SSH agent socket (both optional)
     let app_volumes = {
         let mut entries: Vec<String> = Vec::new();
-        if !cli_tools.is_empty() {
+        if !proxy_tools.is_empty() {
             entries.push("      - kap-bin:/opt/kap:ro".to_string());
         }
         if let Some(sock) = ssh_auth_sock {
@@ -133,6 +168,16 @@ pub fn generate_overlay(
         "\n      SSH_AUTH_SOCK: /ssh-agent"
     } else {
         ""
+    };
+    // Direct-mode tools: inject their env vars into the app container
+    let direct_env = {
+        let mut lines = Vec::new();
+        for tool in &direct_tools {
+            for var in &tool.env {
+                lines.push(format!("\n      {var}: ${{{var}}}"));
+            }
+        }
+        lines.join("")
     };
     let global_config_volume = if global_config {
         "\n      - ${{HOME}}/.kap/kap.toml:/etc/kap/global.toml:ro"
@@ -158,7 +203,7 @@ pub fn generate_overlay(
       http_proxy: http://{sidecar_ip}:3128
       https_proxy: http://{sidecar_ip}:3128
       NO_PROXY: localhost,127.0.0.1
-      no_proxy: localhost,127.0.0.1{ssh_env}
+      no_proxy: localhost,127.0.0.1{ssh_env}{direct_env}
     # DNS goes through kap's filtered forwarder (only resolves allowed domains)
     dns:
       - {sidecar_ip}
@@ -356,7 +401,14 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
 
     // Detect CLI tools for overlay and .env
     let detected = detect_cli_tools();
-    let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
+    let cli_tool_overlays: Vec<CliToolOverlay> = detected
+        .iter()
+        .map(|t| CliToolOverlay {
+            name: t.name.to_string(),
+            mode: CliToolMode::Proxy,
+            env: t.env.iter().map(|e| e.to_string()).collect(),
+        })
+        .collect();
 
     // Generate overlay (using default ComposeConfig — user can customize in kap.toml later)
     let overlay_path = devcontainer_dir.join(OVERLAY_FILENAME);
@@ -370,7 +422,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
         &generate_overlay(
             &service_name,
             &compose_config,
-            &detected_tool_names,
+            &cli_tool_overlays,
             &subnet_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
@@ -464,7 +516,14 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     let compose_config = ComposeConfig::default();
     let subnet_prefix = derive_subnet(project);
     let detected = detect_cli_tools();
-    let detected_tool_names: Vec<String> = detected.iter().map(|t| t.name.to_string()).collect();
+    let cli_tool_overlays: Vec<CliToolOverlay> = detected
+        .iter()
+        .map(|t| CliToolOverlay {
+            name: t.name.to_string(),
+            mode: CliToolMode::Proxy,
+            env: t.env.iter().map(|e| e.to_string()).collect(),
+        })
+        .collect();
     let ssh_auth_sock = detect_ssh_auth_sock();
     let global_config = crate::config::has_global_config();
     write_file(
@@ -472,7 +531,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
         &generate_overlay(
             "app",
             &compose_config,
-            &detected_tool_names,
+            &cli_tool_overlays,
             &subnet_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
@@ -614,6 +673,16 @@ pub fn env_var_default(var: &str) -> Option<&'static str> {
         .flat_map(|t| t.env_defaults.iter())
         .find(|(name, _)| *name == var)
         .map(|(_, expr)| *expr)
+}
+
+/// Return the default env var names for a tool (from DETECTABLE_TOOLS).
+/// E.g. "gh" → ["GH_TOKEN"].
+pub fn default_env_for_tool(tool_name: &str) -> Vec<String> {
+    DETECTABLE_TOOLS
+        .iter()
+        .find(|t| t.name == tool_name)
+        .map(|t| t.env.iter().map(|e| e.to_string()).collect())
+        .unwrap_or_default()
 }
 
 fn detect_cli_tools() -> Vec<&'static DetectedTool> {
@@ -1249,7 +1318,18 @@ mod tests {
     #[test]
     fn overlay_inlines_cli_shim_via_configs() {
         let compose = ComposeConfig::default();
-        let tools = vec!["gh".to_string(), "aws".to_string()];
+        let tools = vec![
+            CliToolOverlay {
+                name: "gh".into(),
+                mode: CliToolMode::Proxy,
+                env: vec![],
+            },
+            CliToolOverlay {
+                name: "aws".into(),
+                mode: CliToolMode::Proxy,
+                env: vec![],
+            },
+        ];
         let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None, false);
         // Shim is inlined via Docker Compose configs, not a separate file
         assert!(overlay.contains("configs:\n  cli-shim:\n    content:"));
@@ -1295,7 +1375,11 @@ mod tests {
     #[test]
     fn overlay_includes_ssh_agent_and_cli_volumes() {
         let compose = ComposeConfig::default();
-        let tools = vec!["gh".to_string()];
+        let tools = vec![CliToolOverlay {
+            name: "gh".into(),
+            mode: CliToolMode::Proxy,
+            env: vec![],
+        }];
         let overlay = generate_overlay(
             "app",
             &compose,
@@ -1322,6 +1406,105 @@ mod tests {
         let compose = ComposeConfig::default();
         let overlay = generate_overlay("app", &compose, &[], "172.28.0", "test", None, false);
         assert!(!overlay.contains("global.toml"));
+    }
+
+    #[test]
+    fn overlay_direct_tool_injects_env_vars() {
+        let compose = ComposeConfig::default();
+        let tools = vec![CliToolOverlay {
+            name: "gh".into(),
+            mode: CliToolMode::Direct,
+            env: vec!["GH_TOKEN".into()],
+        }];
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None, false);
+        // Direct tool should inject env var into app service
+        assert!(overlay.contains("GH_TOKEN: ${GH_TOKEN}"));
+        // Should NOT create a shim config
+        assert!(!overlay.contains("cli-shim"));
+        assert!(!overlay.contains("target: /usr/local/bin/gh"));
+        // Should NOT mount kap-bin (no proxy tools)
+        assert!(!overlay.contains("kap-bin:/opt/kap:ro"));
+    }
+
+    #[test]
+    fn overlay_mixed_proxy_and_direct_tools() {
+        let compose = ComposeConfig::default();
+        let tools = vec![
+            CliToolOverlay {
+                name: "gh".into(),
+                mode: CliToolMode::Direct,
+                env: vec!["GH_TOKEN".into()],
+            },
+            CliToolOverlay {
+                name: "aws".into(),
+                mode: CliToolMode::Proxy,
+                env: vec![],
+            },
+        ];
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None, false);
+        // Direct tool: env var injected, no shim
+        assert!(overlay.contains("GH_TOKEN: ${GH_TOKEN}"));
+        assert!(!overlay.contains("target: /usr/local/bin/gh"));
+        // Proxy tool: shim mounted
+        assert!(overlay.contains("target: /usr/local/bin/aws"));
+        assert!(overlay.contains("cli-shim"));
+        assert!(overlay.contains("kap-bin:/opt/kap:ro"));
+    }
+
+    #[test]
+    fn overlay_direct_tool_no_env_no_injection() {
+        let compose = ComposeConfig::default();
+        let tools = vec![CliToolOverlay {
+            name: "gh".into(),
+            mode: CliToolMode::Direct,
+            env: vec![],
+        }];
+        let overlay = generate_overlay("app", &compose, &tools, "172.28.0", "test", None, false);
+        // No env vars to inject, no shim
+        assert!(!overlay.contains("GH_TOKEN"));
+        assert!(!overlay.contains("cli-shim"));
+    }
+
+    #[test]
+    fn cli_tool_overlay_from_config_uses_detectable_defaults() {
+        let cfg = crate::config::CliToolConfig {
+            name: "gh".into(),
+            mode: CliToolMode::Direct,
+            allow: vec![],
+            deny: vec![],
+            env: vec![], // no explicit env
+        };
+        let overlay = CliToolOverlay::from_config(&cfg);
+        assert_eq!(overlay.mode, CliToolMode::Direct);
+        // Should pick up GH_TOKEN from DETECTABLE_TOOLS
+        assert_eq!(overlay.env, vec!["GH_TOKEN"]);
+    }
+
+    #[test]
+    fn cli_tool_overlay_from_config_explicit_env_wins() {
+        let cfg = crate::config::CliToolConfig {
+            name: "gh".into(),
+            mode: CliToolMode::Direct,
+            allow: vec![],
+            deny: vec![],
+            env: vec!["CUSTOM_VAR".into()],
+        };
+        let overlay = CliToolOverlay::from_config(&cfg);
+        assert_eq!(overlay.env, vec!["CUSTOM_VAR"]);
+    }
+
+    #[test]
+    fn cli_tool_overlay_from_config_proxy_no_defaults() {
+        let cfg = crate::config::CliToolConfig {
+            name: "gh".into(),
+            mode: CliToolMode::Proxy,
+            allow: vec![],
+            deny: vec![],
+            env: vec![], // no explicit env
+        };
+        let overlay = CliToolOverlay::from_config(&cfg);
+        // Proxy mode should NOT auto-resolve env from DETECTABLE_TOOLS
+        assert!(overlay.env.is_empty());
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {

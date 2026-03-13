@@ -104,10 +104,15 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     // so global CLI tools get shim mounts in the overlay)
     let config = crate::config::Config::load(&config_path.to_string_lossy())?;
     let compose_config = config.compose.unwrap_or_default();
-    let cli_tools: Vec<String> = config
+    let cli_tools: Vec<crate::init::CliToolOverlay> = config
         .cli
         .as_ref()
-        .map(|c| c.tools.iter().map(|t| t.name.clone()).collect())
+        .map(|c| {
+            c.tools
+                .iter()
+                .map(crate::init::CliToolOverlay::from_config)
+                .collect()
+        })
         .unwrap_or_default();
 
     // Derive project root from devcontainer_dir (parent of .devcontainer/)

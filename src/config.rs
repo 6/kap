@@ -31,11 +31,21 @@ pub struct CliConfig {
 pub struct CliToolConfig {
     pub name: String,
     #[serde(default)]
+    pub mode: CliToolMode,
+    #[serde(default)]
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
     #[serde(default)]
     pub env: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CliToolMode {
+    #[default]
+    Proxy,
+    Direct,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -752,5 +762,47 @@ allow = ["project.com"]
         project.merge_global(global);
         assert_eq!(project.proxy.network.allow, vec!["project.com"]);
         assert!(project.cli.is_none());
+    }
+
+    #[test]
+    fn parse_cli_tool_mode_direct() {
+        let toml = r#"
+[cli]
+
+[[cli.tools]]
+name = "gh"
+mode = "direct"
+env = ["GH_TOKEN"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let cli = config.cli.unwrap();
+        assert_eq!(cli.tools[0].mode, CliToolMode::Direct);
+    }
+
+    #[test]
+    fn parse_cli_tool_mode_proxy_explicit() {
+        let toml = r#"
+[cli]
+
+[[cli.tools]]
+name = "gh"
+mode = "proxy"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let cli = config.cli.unwrap();
+        assert_eq!(cli.tools[0].mode, CliToolMode::Proxy);
+    }
+
+    #[test]
+    fn parse_cli_tool_mode_default_is_proxy() {
+        let toml = r#"
+[cli]
+
+[[cli.tools]]
+name = "gh"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let cli = config.cli.unwrap();
+        assert_eq!(cli.tools[0].mode, CliToolMode::Proxy);
     }
 }
