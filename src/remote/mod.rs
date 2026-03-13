@@ -57,6 +57,7 @@ pub async fn start(listen: &str, data_dir: PathBuf) -> Result<()> {
     }
 
     // Write our PID
+    std::fs::create_dir_all(&data_dir)?;
     let pid = std::process::id();
     std::fs::write(pid_file(&data_dir), pid.to_string())?;
 
@@ -309,5 +310,33 @@ mod tests {
             .body(Full::new(Bytes::new()))
             .unwrap();
         assert_eq!(extract_bearer(&req).as_deref(), Some(""));
+    }
+
+    fn tempdir(suffix: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("kap-remote-{}-{suffix}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn pid_file_created_in_nonexistent_dir() {
+        let dir = tempdir("pid-nested");
+        let data_dir = dir.join("nested").join("remote");
+        assert!(!data_dir.exists());
+
+        // This is the same sequence as start(): create dir, then write PID.
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(pid_file(&data_dir), "12345").unwrap();
+
+        assert_eq!(read_pid(&data_dir), Some(12345));
+    }
+
+    #[test]
+    fn read_pid_returns_none_for_missing_dir() {
+        let dir = tempdir("pid-missing");
+        let data_dir = dir.join("does-not-exist");
+        assert_eq!(read_pid(&data_dir), None);
     }
 }
