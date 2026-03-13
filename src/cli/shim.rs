@@ -22,11 +22,20 @@ fn sidecar_host() -> String {
 }
 
 pub async fn run(tool: &str, args: &[String]) -> Result<()> {
+    // Read sidecar host FIRST, then clear proxy env vars so reqwest
+    // doesn't route through the HTTP proxy to reach the sidecar.
     let host = sidecar_host();
     let url = format!("http://{host}:{DEVG_CLI_PORT}/{tool}");
 
-    // Bypass HTTP_PROXY - talk directly to the sidecar on the internal network
-    // Send current directory so sidecar can cd into the workspace
+    // Clear proxy env vars so reqwest doesn't route through the HTTP proxy.
+    // SAFETY: single-threaded shim process.
+    unsafe {
+        std::env::remove_var("HTTP_PROXY");
+        std::env::remove_var("HTTPS_PROXY");
+        std::env::remove_var("http_proxy");
+        std::env::remove_var("https_proxy");
+    }
+
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
@@ -131,11 +140,18 @@ fn find_binary_in_path(name: &str, path: &str) -> Result<PathBuf> {
             continue;
         }
         let candidate = PathBuf::from(dir).join(name);
-        if candidate.is_file() {
+        if candidate.is_file() && !is_kap_shim(&candidate) {
             return Ok(candidate);
         }
     }
     anyhow::bail!("{name}: not found in PATH (install it in your app container for direct mode)")
+}
+
+/// Check if a file is a kap shim script (to avoid exec'ing ourselves).
+fn is_kap_shim(path: &PathBuf) -> bool {
+    std::fs::read_to_string(path)
+        .map(|content| content.contains("sidecar-cli-shim"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
