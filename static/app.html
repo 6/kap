@@ -455,6 +455,7 @@ async function openSession(id) {
 
   try {
     const events = await apiFetch(`/api/agent/session/${id}`);
+    events.reverse();
     let html = `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
     html += `<div style="margin:8px 0"><button class="btn-danger" onclick="cancelAgent('${esc(id)}')">Cancel agent</button></div>`;
     html += '<div id="session-events">';
@@ -476,7 +477,10 @@ function renderEvent(ev) {
   const roleClass = ev.role === 'user' ? 'user' : ev.role === 'assistant' ? 'assistant' : 'system';
   const ts = ev.timestamp ? ev.timestamp.split('T')[1]?.slice(0,8) : '';
   let summary = esc(ev.summary || '');
-  if (ev.tool_name) summary = `<span class="tool">${esc(ev.tool_name)}</span> ${summary}`;
+  if (ev.tool_name) {
+    summary = `<span class="tool">${esc(ev.tool_name)}</span> ${summary}`;
+  }
+  if (!ev.summary && !ev.tool_name) summary = `<span style="color:var(--dim)">${esc(ev.type)}</span>`;
   return `<div class="event"><span class="role ${roleClass}">${esc(role)}</span> <span class="ts">${ts}</span><div class="summary">${summary}</div></div>`;
 }
 
@@ -487,7 +491,7 @@ function connectAgentWs(id) {
     try {
       const ev = JSON.parse(e.data);
       const container = document.getElementById('session-events');
-      if (container) container.innerHTML += renderEvent(ev);
+      if (container) container.insertAdjacentHTML('afterbegin', renderEvent(ev));
     } catch(_) {}
   };
 }

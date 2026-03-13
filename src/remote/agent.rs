@@ -65,40 +65,41 @@ struct RawMessage {
 
 /// Discover Claude Code sessions in the app container.
 /// Sessions live at ~/.claude/projects/*/  with *.jsonl files.
+/// Excludes subagent sessions (under /subagents/ directories).
 pub fn discover_sessions(app_container: &str) -> Result<Vec<SessionInfo>> {
-    // Find all JSONL session files
+    // Single docker exec: find session files (excluding subagents), then for each
+    // print the path, line count, and first 5 lines separated by a marker.
+    // This avoids N+1 docker exec calls which are slow (~300ms each).
     let output = containers::exec_in(
         app_container,
         &[
             "sh",
             "-c",
-            "find /home -path '*/.claude/projects/*/*.jsonl' -type f 2>/dev/null; \
-             find /root -path '*/.claude/projects/*/*.jsonl' -type f 2>/dev/null",
+            r#"find /home /root -path '*/.claude/projects/*/*.jsonl' -not -path '*/subagents/*' -type f 2>/dev/null | while read -r f; do
+  wc=$(wc -l < "$f" 2>/dev/null || echo 0)
+  head=$(head -5 "$f" 2>/dev/null)
+  printf '@@KAP_SESSION@@%s@@%s\n%s\n' "$f" "$wc" "$head"
+done"#,
         ],
     )
     .unwrap_or_default();
 
     let mut sessions = Vec::new();
 
-    for path in output.lines() {
-        let path = path.trim();
-        if path.is_empty() {
+    for block in output.split("@@KAP_SESSION@@") {
+        let block = block.trim();
+        if block.is_empty() {
             continue;
         }
 
-        // Extract session ID from filename: .../projects/{project}/{session_id}.jsonl
+        // Format: {path}@@{line_count}\n{head lines...}
+        let (header, head) = block.split_once('\n').unwrap_or((block, ""));
+        let (path, wc_str) = header.rsplit_once("@@").unwrap_or((header, "0"));
+        let event_count = wc_str.trim().parse::<usize>().unwrap_or(0);
+
         let filename = path.rsplit('/').next().unwrap_or("");
         let session_id = filename.strip_suffix(".jsonl").unwrap_or(filename);
-
-        // Extract project name from path
         let project = extract_project_name(path);
-
-        // Get a small sample of the file to determine branch and event count
-        let head = containers::exec_in(app_container, &["head", "-5", path]).unwrap_or_default();
-        let wc = containers::exec_in(app_container, &["wc", "-l", path])
-            .and_then(|s| s.split_whitespace().next().map(String::from))
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
 
         let mut branch = None;
         let mut last_ts = None;
@@ -119,7 +120,7 @@ pub fn discover_sessions(app_container: &str) -> Result<Vec<SessionInfo>> {
             project,
             branch,
             last_event: last_ts,
-            event_count: wc,
+            event_count,
         });
     }
 
@@ -182,6 +183,79 @@ pub fn parse_session_events(jsonl: &str) -> Vec<SessionEvent> {
         .collect()
 }
 
+/// Truncate a string: take first line, cap at `max_len` chars.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    let first_line = s.lines().next().unwrap_or(s).trim();
+    let is_multiline = s.contains('\n');
+    if first_line.chars().count() <= max_len && !is_multiline {
+        return first_line.to_string();
+    }
+    let truncated: String = first_line.chars().take(max_len).collect();
+    format!("{truncated}…")
+}
+
+/// Extract a compact description from a tool_use input object.
+fn compact_tool_input(tool_name: &str, input: &serde_json::Value) -> Option<String> {
+    let obj = input.as_object()?;
+    let raw = match tool_name {
+        "Bash" => obj.get("command")?.as_str()?,
+        "Read" | "Write" | "Edit" => obj.get("file_path")?.as_str()?,
+        "Grep" | "Glob" => obj.get("pattern")?.as_str()?,
+        "Agent" => {
+            return obj
+                .get("description")
+                .or_else(|| obj.get("prompt"))
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_str(s, 120));
+        }
+        _ => {
+            return obj
+                .get("command")
+                .or_else(|| obj.get("file_path"))
+                .or_else(|| obj.get("path"))
+                .or_else(|| obj.get("query"))
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_str(s, 120));
+        }
+    };
+    Some(truncate_str(raw, 120))
+}
+
+/// Extract a summary from a tool_result content block.
+fn tool_result_summary(item: &serde_json::Value) -> String {
+    if item.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+        let err = item
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("error");
+        return format!("(error) {}", truncate_str(err, 150));
+    }
+    match item.get("content") {
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                "(empty result)".to_string()
+            } else {
+                truncate_str(trimmed, 200)
+            }
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            for block in arr {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text")
+                    && let Some(text) = block.get("text").and_then(|t| t.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return truncate_str(trimmed, 200);
+                    }
+                }
+            }
+            "(tool result)".to_string()
+        }
+        _ => "(tool result)".to_string(),
+    }
+}
+
 /// Extract a human-readable summary from the event.
 fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String> {
     // System and queue events don't need a message field
@@ -195,27 +269,25 @@ fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String>
 
     match event_type {
         "user" => {
-            // User message: extract text content
+            // User message: extract text content or tool_result
             match &msg.content {
-                Some(serde_json::Value::String(s)) => {
-                    let trimmed = s.trim();
-                    if trimmed.len() > 200 {
-                        Some(format!("{}...", &trimmed[..200]))
-                    } else {
-                        Some(trimmed.to_string())
-                    }
-                }
+                Some(serde_json::Value::String(s)) => Some(truncate_str(s, 200)),
                 Some(serde_json::Value::Array(arr)) => {
-                    // Look for text blocks
                     for item in arr {
-                        if item.get("type").and_then(|t| t.as_str()) == Some("text")
-                            && let Some(text) = item.get("text").and_then(|t| t.as_str())
-                        {
-                            let trimmed = text.trim();
-                            if trimmed.len() > 200 {
-                                return Some(format!("{}...", &trimmed[..200]));
+                        let item_type = item.get("type").and_then(|t| t.as_str());
+                        match item_type {
+                            Some("text") => {
+                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                    let trimmed = text.trim();
+                                    if !trimmed.is_empty() {
+                                        return Some(truncate_str(trimmed, 200));
+                                    }
+                                }
                             }
-                            return Some(trimmed.to_string());
+                            Some("tool_result") => {
+                                return Some(tool_result_summary(item));
+                            }
+                            _ => {}
                         }
                     }
                     None
@@ -234,21 +306,24 @@ fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String>
                                 if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                                     let trimmed = text.trim();
                                     if !trimmed.is_empty() {
-                                        if trimmed.len() > 200 {
-                                            return Some(format!("{}...", &trimmed[..200]));
-                                        }
-                                        return Some(trimmed.to_string());
+                                        return Some(truncate_str(trimmed, 200));
                                     }
                                 }
                             }
                             Some("tool_use") => {
                                 let name = item.get("name").and_then(|n| n.as_str());
                                 if let Some(name) = name {
-                                    return Some(format!("tool_use: {name}"));
+                                    let desc = item
+                                        .get("input")
+                                        .and_then(|inp| compact_tool_input(name, inp));
+                                    return match desc {
+                                        Some(d) => Some(d),
+                                        None => Some(format!("tool_use: {name}")),
+                                    };
                                 }
                             }
                             Some("thinking") => {
-                                return Some("thinking...".to_string());
+                                return Some("thinking…".to_string());
                             }
                             _ => {}
                         }
@@ -351,6 +426,7 @@ mod tests {
         let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","id":"t1","input":{}}]},"timestamp":"2026-03-07T10:00:02Z","uuid":"ghi"}"#;
         let events = parse_session_events(jsonl);
         assert_eq!(events.len(), 1);
+        // Empty input: falls back to "tool_use: Read"
         assert_eq!(events[0].summary.as_deref(), Some("tool_use: Read"));
         assert_eq!(events[0].tool_name.as_deref(), Some("Read"));
     }
@@ -360,7 +436,7 @@ mod tests {
         let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"let me think..."}]},"timestamp":"2026-03-07T10:00:03Z","uuid":"jkl"}"#;
         let events = parse_session_events(jsonl);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].summary.as_deref(), Some("thinking..."));
+        assert_eq!(events[0].summary.as_deref(), Some("thinking…"));
     }
 
     #[test]
@@ -392,7 +468,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         let summary = events[0].summary.as_ref().unwrap();
         assert!(summary.len() < 210);
-        assert!(summary.ends_with("..."));
+        assert!(summary.ends_with('…'));
     }
 
     #[test]
@@ -443,11 +519,87 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_user_message_included() {
+    fn tool_result_user_message_has_summary() {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"uuid":"1","timestamp":"t"}"#;
         let events = parse_session_events(jsonl);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].role.as_deref(), Some("user"));
+        assert_eq!(events[0].summary.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn tool_result_error_shows_prefix() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"command not found","is_error":true}]},"uuid":"1","timestamp":"t"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("(error) command not found"));
+    }
+
+    #[test]
+    fn tool_result_empty_content() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":""}]},"uuid":"1","timestamp":"t"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("(empty result)"));
+    }
+
+    #[test]
+    fn tool_result_array_content() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"file contents here"}]}]},"uuid":"1","timestamp":"t"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("file contents here"));
+    }
+
+    #[test]
+    fn tool_use_bash_shows_command() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","id":"t1","input":{"command":"ls -la /tmp"}}]},"timestamp":"t","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("ls -la /tmp"));
+        assert_eq!(events[0].tool_name.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn tool_use_read_shows_file_path() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","id":"t1","input":{"file_path":"/foo/bar.rs"}}]},"timestamp":"t","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("/foo/bar.rs"));
+    }
+
+    #[test]
+    fn tool_use_grep_shows_pattern() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Grep","id":"t1","input":{"pattern":"fn main"}}]},"timestamp":"t","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("fn main"));
+    }
+
+    #[test]
+    fn tool_use_unknown_tool_no_input() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"CustomTool","id":"t1","input":{"stuff":123}}]},"timestamp":"t","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("tool_use: CustomTool"));
+    }
+
+    #[test]
+    fn tool_use_multiline_bash_truncated() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","id":"t1","input":{"command":"echo hello\necho world\necho done"}}]},"timestamp":"t","uuid":"1"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events[0].summary.as_deref(), Some("echo hello…"));
+    }
+
+    #[test]
+    fn compact_tool_input_basic() {
+        let input = serde_json::json!({"command": "git status"});
+        assert_eq!(
+            compact_tool_input("Bash", &input),
+            Some("git status".to_string())
+        );
+
+        let input = serde_json::json!({"file_path": "/src/main.rs"});
+        assert_eq!(
+            compact_tool_input("Read", &input),
+            Some("/src/main.rs".to_string())
+        );
+
+        let input = serde_json::json!({});
+        assert_eq!(compact_tool_input("Bash", &input), None);
     }
 
     #[test]
