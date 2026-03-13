@@ -99,8 +99,25 @@ impl McpFilters {
 // Config watcher
 // ---------------------------------------------------------------------------
 
-fn file_mtime(path: &str) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+/// File fingerprint: mtime + size. On macOS with Docker Desktop,
+/// bind-mount mtime propagation is unreliable, so we also check size.
+/// For same-size edits, we fall back to content hashing.
+fn file_fingerprint(path: &str) -> Option<(SystemTime, u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?;
+    let size = meta.len();
+    // Cheap content hash: read first+last 4KB and hash with file size
+    let hash = std::fs::read(path)
+        .ok()
+        .map(|data| {
+            let mut h: u64 = data.len() as u64;
+            for &b in data.iter().take(4096).chain(data.iter().rev().take(4096)) {
+                h = h.wrapping_mul(31).wrapping_add(b as u64);
+            }
+            h
+        })
+        .unwrap_or(0);
+    Some((mtime, size, hash))
 }
 
 pub async fn watch_config(
@@ -110,14 +127,14 @@ pub async fn watch_config(
     mcp_filters: Shared<McpFilters>,
     shim_dir: PathBuf,
 ) {
-    let mut last_mtime = file_mtime(&path);
+    let mut last_fingerprint = file_fingerprint(&path);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let mtime = file_mtime(&path);
-        if mtime == last_mtime {
+        let fingerprint = file_fingerprint(&path);
+        if fingerprint == last_fingerprint {
             continue;
         }
-        last_mtime = mtime;
+        last_fingerprint = fingerprint;
         match Config::load(&path) {
             Ok(cfg) => {
                 // Rebuild allowlist (include MCP upstream domains)
@@ -362,5 +379,40 @@ name = "gh"
         assert!(entries.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn file_fingerprint_detects_content_change() {
+        let dir = tempdir("fingerprint-change");
+        let path = dir.join("test.toml");
+        std::fs::write(&path, "version = 1").unwrap();
+        let fp1 = file_fingerprint(path.to_str().unwrap());
+
+        // Change content (same length to test that hash detects it)
+        std::fs::write(&path, "version = 2").unwrap();
+        let fp2 = file_fingerprint(path.to_str().unwrap());
+
+        assert!(fp1.is_some());
+        assert!(fp2.is_some());
+        assert_ne!(fp1, fp2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn file_fingerprint_stable_for_same_content() {
+        let dir = tempdir("fingerprint-stable");
+        let path = dir.join("test.toml");
+        std::fs::write(&path, "version = 1").unwrap();
+        let fp1 = file_fingerprint(path.to_str().unwrap());
+        let fp2 = file_fingerprint(path.to_str().unwrap());
+        assert_eq!(fp1, fp2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn file_fingerprint_nonexistent_returns_none() {
+        assert!(file_fingerprint("/nonexistent/path.toml").is_none());
     }
 }

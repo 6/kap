@@ -536,7 +536,12 @@ struct DomainGroup {
 const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
     DomainGroup {
         label: "GitHub",
-        domains: &["github.com", "*.github.com", "*.githubusercontent.com"],
+        domains: &[
+            "github.com",
+            "*.github.com",
+            "*.githubusercontent.com",
+            "*.blob.core.windows.net", // GitHub Actions artifact downloads
+        ],
     },
     DomainGroup {
         label: "AI providers",
