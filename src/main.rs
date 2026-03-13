@@ -7,10 +7,9 @@ mod init_env;
 mod mcp;
 mod mcp_cmd;
 mod proxy;
+mod reload;
 mod remote;
 mod status;
-
-use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
@@ -275,32 +274,58 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
+            // Build shared state for hot-reload
             let mcp_domains = cfg.mcp_upstream_domains();
             let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();
             all_allow.extend(mcp_domains);
-            let allowlist = Arc::new(proxy::allowlist::Allowlist::new(
+            let shared_allowlist = reload::new_shared(proxy::allowlist::Allowlist::new(
                 &all_allow,
                 &cfg.proxy.network.deny,
             ));
+            let shared_cli = reload::new_shared(reload::CliTools::from_config(&cfg));
+            let shared_mcp = reload::new_shared(reload::McpFilters::from_config(&cfg));
 
-            let proxy_fut = proxy::run(cfg.clone(), observe, allowlist.clone());
+            // Write CLI shim scripts to shared volume
+            let shim_dir = std::path::PathBuf::from("/opt/kap/bin");
+            if let Err(e) = reload::write_shims(&cfg, &shim_dir) {
+                eprintln!("[sidecar] warning: could not write shims: {e}");
+            }
+
+            let proxy_fut = proxy::run(cfg.clone(), observe, shared_allowlist.clone());
             let dns_listen = cfg.proxy.dns_listen.clone();
             let dns_upstream = cfg.proxy.dns_upstream.clone();
 
             let mut set = tokio::task::JoinSet::new();
             set.spawn(proxy_fut);
-            set.spawn(async move { proxy::dns::run(&dns_listen, &dns_upstream, allowlist).await });
+            set.spawn({
+                let al = shared_allowlist.clone();
+                async move { proxy::dns::run(&dns_listen, &dns_upstream, al).await }
+            });
 
             if let Some(ref mcp_cfg) = cfg.mcp {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
                 let mcp_cfg = mcp_cfg.clone();
-                set.spawn(async move { mcp::run(&mcp_cfg, logger).await });
+                let mcp_filters = shared_mcp.clone();
+                set.spawn(async move { mcp::run(&mcp_cfg, mcp_filters, logger).await });
             }
 
-            if let Some(ref cli_cfg) = cfg.cli {
+            if let Some(ref _cli_cfg) = cfg.cli {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
-                let cli_cfg = cli_cfg.clone();
-                set.spawn(async move { cli::run(&cli_cfg, logger).await });
+                let cli_tools = shared_cli.clone();
+                set.spawn(async move { cli::run(cli_tools, logger).await });
+            }
+
+            // Spawn config watcher for hot-reload
+            {
+                let config_path = config.clone();
+                let al = shared_allowlist.clone();
+                let ct = shared_cli.clone();
+                let mf = shared_mcp.clone();
+                let sd = shim_dir.clone();
+                set.spawn(async move {
+                    reload::watch_config(config_path, al, ct, mf, sd).await;
+                    Ok(())
+                });
             }
 
             while let Some(result) = set.join_next().await {

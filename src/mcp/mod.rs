@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 
 use crate::config::McpConfig;
 use crate::proxy::log::{ProxyLogEntry, ProxyLogger};
+use crate::reload::{self, McpFilters, Shared};
 use filter::ToolFilter;
 use upstream::{StoredAuth, UpstreamClient};
 
@@ -31,10 +32,15 @@ struct McpServer {
 struct McpState {
     servers: HashMap<String, McpServer>,
     skipped: HashMap<String, String>,
+    shared_filters: Shared<McpFilters>,
     logger: ProxyLogger,
 }
 
-pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
+pub async fn run(
+    config: &McpConfig,
+    shared_filters: Shared<McpFilters>,
+    logger: ProxyLogger,
+) -> Result<()> {
     let mut servers = HashMap::new();
     let mut skipped: HashMap<String, String> = HashMap::new();
 
@@ -92,6 +98,7 @@ pub async fn run(config: &McpConfig, logger: ProxyLogger) -> Result<()> {
     let state = Arc::new(McpState {
         servers,
         skipped,
+        shared_filters,
         logger,
     });
     let listener = TcpListener::bind(&config.listen).await?;
@@ -134,6 +141,10 @@ async fn handle_request(
         return Ok(json_response(404, &body));
     };
 
+    // Load current tool filters (hot-reloadable)
+    let shared = reload::load(&state.shared_filters);
+    let filter = shared.filters.get(&server_name).unwrap_or(&server.filter);
+
     // Only accept POST
     if method != hyper::Method::POST {
         return Ok(json_response(
@@ -155,15 +166,16 @@ async fn handle_request(
 
     match rpc_req.method.as_str() {
         "tools/call" => {
-            handle_tools_call(server, &rpc_req, &body, &state.logger, &server_name).await
+            handle_tools_call(server, filter, &rpc_req, &body, &state.logger, &server_name).await
         }
-        "tools/list" => handle_tools_list(server, &body, &state.logger, &server_name).await,
+        "tools/list" => handle_tools_list(server, filter, &body, &state.logger, &server_name).await,
         _ => forward_raw(server, &body, &state.logger, &server_name).await,
     }
 }
 
 async fn handle_tools_call(
     server: &McpServer,
+    filter: &ToolFilter,
     rpc_req: &jsonrpc::Request,
     body: &[u8],
     logger: &ProxyLogger,
@@ -171,7 +183,7 @@ async fn handle_tools_call(
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let tool_name = jsonrpc::tool_call_name(&rpc_req.params).unwrap_or("unknown");
 
-    if !server.filter.is_allowed(tool_name) {
+    if !filter.is_allowed(tool_name) {
         let entry = ProxyLogEntry::new(
             &format!("mcp/{server_name}"),
             "denied",
@@ -200,6 +212,7 @@ async fn handle_tools_call(
 
 async fn handle_tools_list(
     server: &McpServer,
+    filter: &ToolFilter,
     body: &[u8],
     logger: &ProxyLogger,
     server_name: &str,
@@ -221,7 +234,7 @@ async fn handle_tools_list(
     // Filter tools from the response
     if let Ok(mut rpc_resp) = serde_json::from_slice::<jsonrpc::Response>(&resp_body) {
         if let Some(ref mut result) = rpc_resp.result {
-            jsonrpc::filter_tools_list(result, |name| server.filter.is_allowed(name));
+            jsonrpc::filter_tools_list(result, |name| filter.is_allowed(name));
         }
         return Ok(json_response(status, &rpc_resp));
     }
@@ -419,6 +432,9 @@ mod tests {
         let state = Arc::new(McpState {
             servers,
             skipped: HashMap::new(),
+            shared_filters: reload::new_shared(McpFilters {
+                filters: HashMap::new(),
+            }),
             logger: ProxyLogger::new("/dev/null"),
         });
 
@@ -715,6 +731,9 @@ mod tests {
         let state = Arc::new(McpState {
             servers: HashMap::new(),
             skipped,
+            shared_filters: reload::new_shared(McpFilters {
+                filters: HashMap::new(),
+            }),
             logger: ProxyLogger::new("/dev/null"),
         });
 

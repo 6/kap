@@ -1,7 +1,6 @@
 pub mod filter;
 pub mod shim;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -15,37 +14,33 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
-use crate::config::CliConfig;
+use crate::config::CliToolMode;
 use crate::proxy::log::{ProxyLogEntry, ProxyLogger};
-use filter::CommandFilter;
-
-struct CliTool {
-    filter: CommandFilter,
-    env_vars: Vec<String>,
-}
+use crate::reload::{self, CliTools, Shared};
 
 struct CliState {
-    tools: HashMap<String, CliTool>,
+    tools: Shared<CliTools>,
     logger: ProxyLogger,
 }
 
-pub async fn run(config: &CliConfig, logger: ProxyLogger) -> Result<()> {
-    let mut tools = HashMap::new();
-    for tool_cfg in &config.tools {
-        let filter = CommandFilter::new(&tool_cfg.allow, &tool_cfg.deny);
-        eprintln!("[cli] {} ({})", tool_cfg.name, tool_cfg.allow.join(", "));
-        tools.insert(
-            tool_cfg.name.clone(),
-            CliTool {
-                filter,
-                env_vars: tool_cfg.env.clone(),
-            },
-        );
+const DEFAULT_CLI_LISTEN: &str = "0.0.0.0:3130";
+
+pub async fn run(tools: Shared<CliTools>, logger: ProxyLogger) -> Result<()> {
+    // Log initial tools
+    {
+        let t = reload::load(&tools);
+        for (name, tool) in &t.tools {
+            let mode = match tool.mode {
+                CliToolMode::Proxy => "proxy",
+                CliToolMode::Direct => "direct",
+            };
+            eprintln!("[cli] {name} ({mode})");
+        }
     }
 
     let state = Arc::new(CliState { tools, logger });
-    let listener = TcpListener::bind(&config.listen).await?;
-    eprintln!("[cli] listening on {}", config.listen);
+    let listener = TcpListener::bind(DEFAULT_CLI_LISTEN).await?;
+    eprintln!("[cli] listening on {DEFAULT_CLI_LISTEN}");
 
     loop {
         let (stream, _addr) = listener.accept().await?;
@@ -85,7 +80,10 @@ async fn handle_request(
         .unwrap_or("")
         .to_string();
 
-    let Some(tool) = state.tools.get(&tool_name) else {
+    // Load current tools (hot-reloadable)
+    let tools = reload::load(&state.tools);
+
+    let Some(tool) = tools.tools.get(&tool_name) else {
         return Ok(error_response(404, &format!("unknown tool: {tool_name}")));
     };
 
@@ -104,12 +102,6 @@ async fn handle_request(
         None => return Ok(error_response(400, "missing \"args\" array")),
     };
 
-    // Map the app container's workspace path to /workspace on the sidecar
-    let cwd = parsed["cwd"]
-        .as_str()
-        .map(map_workspace_path)
-        .unwrap_or_else(|| "/workspace".to_string());
-
     let cmd_display = args.join(" ");
     let log_target = format!("cli/{tool_name}");
 
@@ -125,6 +117,29 @@ async fn handle_request(
 
     let entry = ProxyLogEntry::new(&log_target, "allowed", &cmd_display);
     let _ = state.logger.log(&entry).await;
+
+    // Direct mode: return env vars, let the shim exec the real binary
+    if tool.mode == CliToolMode::Direct {
+        let env_pairs: Vec<String> = tool
+            .env_vars
+            .iter()
+            .filter_map(|var| std::env::var(var).ok().map(|val| format!("{var}={val}")))
+            .collect();
+        let env_b64 = base64::engine::general_purpose::STANDARD.encode(env_pairs.join("\n"));
+
+        let mut builder = Response::builder().status(200).header("X-Mode", "direct");
+        if !env_b64.is_empty() {
+            builder = builder.header("X-Env", env_b64);
+        }
+        return Ok(builder.body(Full::new(Bytes::new())).unwrap());
+    }
+
+    // Proxy mode: execute the command on the sidecar
+    // Map the app container's workspace path to /workspace on the sidecar
+    let cwd = parsed["cwd"]
+        .as_str()
+        .map(map_workspace_path)
+        .unwrap_or_else(|| "/workspace".to_string());
 
     // Spawn the tool with only the configured env vars from the sidecar env
     let mut cmd = tokio::process::Command::new(&tool_name);
@@ -209,6 +224,9 @@ fn error_response(status: u16, message: &str) -> Response<Full<Bytes>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::filter::CommandFilter;
+    use crate::proxy::log::ProxyLogger;
+    use std::collections::HashMap;
 
     async fn start_cli_proxy(tool_name: &str, allow: &[&str], deny: &[&str]) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -218,17 +236,19 @@ mod tests {
         let mut tools = HashMap::new();
         tools.insert(
             tool_name.to_string(),
-            CliTool {
+            reload::CliTool {
                 filter: CommandFilter::new(
                     &allow.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                     &deny.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 ),
                 env_vars: vec![],
+                mode: CliToolMode::Proxy,
             },
         );
 
+        let shared = reload::new_shared(CliTools { tools });
         let state = Arc::new(CliState {
-            tools,
+            tools: shared,
             logger: ProxyLogger::new("/dev/null"),
         });
 

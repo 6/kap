@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 use super::allowlist::Allowlist;
+use crate::reload::{self, Shared};
 
 /// DNS header flags
 const FLAG_RESPONSE: u16 = 0x8000;
@@ -23,7 +24,7 @@ const FLAG_RCODE_NXDOMAIN: u16 = 0x0003;
 const FLAG_RCODE_SERVFAIL: u16 = 0x0002;
 const FLAG_RA: u16 = 0x0080; // recursion available
 
-pub async fn run(listen: &str, upstream: &str, allowlist: Arc<Allowlist>) -> Result<()> {
+pub async fn run(listen: &str, upstream: &str, allowlist: Shared<Allowlist>) -> Result<()> {
     let sock = UdpSocket::bind(listen).await?;
     let upstream_addr: SocketAddr = upstream.parse()?;
     eprintln!("[dns] listening on {listen}, upstream {upstream}");
@@ -34,10 +35,10 @@ pub async fn run(listen: &str, upstream: &str, allowlist: Arc<Allowlist>) -> Res
         let (len, src) = sock.recv_from(&mut buf).await?;
         let query = buf[..len].to_vec();
         let sock = sock.clone();
-        let allowlist = allowlist.clone();
+        let al = reload::load(&allowlist);
 
         tokio::spawn(async move {
-            if let Err(e) = handle_query(&sock, &query, src, upstream_addr, &allowlist).await {
+            if let Err(e) = handle_query(&sock, &query, src, upstream_addr, &al).await {
                 eprintln!("[dns] error handling query from {src}: {e}");
             }
         });

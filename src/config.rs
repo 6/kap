@@ -20,6 +20,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)] // listen is deserialized but read by the CLI proxy via hardcoded constant
 pub struct CliConfig {
     #[serde(default = "default_cli_listen")]
     pub listen: String,

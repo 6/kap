@@ -17,16 +17,17 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::Config;
+use crate::reload::{self, Shared};
 use allowlist::Allowlist;
 use log::{ProxyLogEntry, ProxyLogger};
 
 struct ProxyState {
-    allowlist: Arc<Allowlist>,
+    allowlist: Shared<Allowlist>,
     logger: ProxyLogger,
     observe: bool,
 }
 
-pub async fn run(config: Config, observe: bool, allowlist: Arc<Allowlist>) -> Result<()> {
+pub async fn run(config: Config, observe: bool, allowlist: Shared<Allowlist>) -> Result<()> {
     let listener = TcpListener::bind(&config.proxy.listen).await?;
     run_with_listener(config, observe, allowlist, listener).await
 }
@@ -34,7 +35,7 @@ pub async fn run(config: Config, observe: bool, allowlist: Arc<Allowlist>) -> Re
 async fn run_with_listener(
     config: Config,
     observe: bool,
-    allowlist: Arc<Allowlist>,
+    allowlist: Shared<Allowlist>,
     listener: TcpListener,
 ) -> Result<()> {
     let logger = ProxyLogger::new(&config.proxy.observe.log);
@@ -102,7 +103,8 @@ async fn handle_connect(
         .unwrap_or_default();
     let domain = host.split(':').next().unwrap_or(&host);
 
-    let allowed = state.observe || state.allowlist.is_allowed(&host);
+    let allowlist = reload::load(&state.allowlist);
+    let allowed = state.observe || allowlist.is_allowed(&host);
     let action = if state.observe {
         "observed"
     } else if allowed {
@@ -190,7 +192,8 @@ async fn handle_http(
     let host = uri.host().map(|h| h.to_string()).unwrap_or_default();
     let method = req.method().clone();
 
-    let allowed = state.observe || state.allowlist.is_allowed(&host);
+    let allowlist = reload::load(&state.allowlist);
+    let allowed = state.observe || allowlist.is_allowed(&host);
     let action = if state.observe {
         "observed"
     } else if allowed {
@@ -286,7 +289,7 @@ mod tests {
         config.proxy.network.deny = deny.iter().map(|s| s.to_string()).collect();
         config.proxy.observe.log = "/dev/null".to_string();
 
-        let allowlist = Arc::new(Allowlist::new(
+        let allowlist = crate::reload::new_shared(Allowlist::new(
             &config.proxy.network.allow,
             &config.proxy.network.deny,
         ));
