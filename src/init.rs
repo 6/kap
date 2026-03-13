@@ -163,7 +163,7 @@ pub fn generate_overlay(
         r#"configs:
   kap-path:
     content: |
-      export PATH="/opt/kap/bin:$PATH"
+      export PATH="/opt/kap/bin:$$PATH"
 
 "#
     } else {
