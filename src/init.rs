@@ -10,6 +10,42 @@ use std::path::Path;
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.kap.yml";
 
+/// Parse JSONC (JSON with trailing commas and // comments) into serde_json::Value.
+/// devcontainer.json commonly uses JSONC syntax.
+pub fn parse_jsonc(input: &str) -> serde_json::Result<serde_json::Value> {
+    // Strip // line comments
+    let mut cleaned = String::with_capacity(input.len());
+    for line in input.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        cleaned.push_str(line);
+        cleaned.push('\n');
+    }
+    // Remove trailing commas: , followed by optional whitespace/newlines then ] or }
+    let bytes = cleaned.as_bytes();
+    let mut result = String::with_capacity(cleaned.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b',' {
+            // Look ahead past whitespace/newlines for ] or }
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b']' || bytes[j] == b'}') {
+                // Skip the comma (trailing comma)
+                i += 1;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    serde_json::from_str(&result)
+}
+
 pub fn run(project_dir: &str, yes: bool, force: bool) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
@@ -38,7 +74,7 @@ fn confirm(prompt: &str) -> bool {
 pub fn read_project_name(devcontainer_dir: &Path) -> String {
     let path = devcontainer_dir.join("devcontainer.json");
     if let Ok(content) = std::fs::read_to_string(&path)
-        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+        && let Ok(json) = parse_jsonc(&content)
         && let Some(name) = json["name"].as_str()
     {
         return name.to_string();
@@ -57,7 +93,7 @@ pub fn read_service_name(devcontainer_dir: &Path) -> Result<String> {
     let content =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let json: serde_json::Value =
-        serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+        parse_jsonc(&content).with_context(|| format!("parsing {}", path.display()))?;
     Ok(json["service"].as_str().unwrap_or("app").to_string())
 }
 
@@ -270,7 +306,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     }
 
     let dc_content = std::fs::read_to_string(&devcontainer_json_path)?;
-    let dc_json: serde_json::Value = serde_json::from_str(&dc_content)?;
+    let dc_json: serde_json::Value = parse_jsonc(&dc_content)?;
 
     let image_based = dc_json.get("image").is_some() && dc_json.get("dockerComposeFile").is_none();
 
@@ -1337,6 +1373,42 @@ mod tests {
         let compose = ComposeConfig::default();
         let overlay = generate_overlay("app", &compose, false, "172.28.0", "test", None, false);
         assert!(!overlay.contains("global.toml"));
+    }
+
+    #[test]
+    fn parse_jsonc_handles_trailing_commas() {
+        let input = r#"{
+  "name": "test",
+  "mounts": [
+    "source=a,target=b",
+    "source=c,target=d",
+  ],
+  "containerEnv": {
+    "FOO": "bar",
+    "BAZ": "qux",
+  },
+}"#;
+        let val = parse_jsonc(input).unwrap();
+        assert_eq!(val["name"], "test");
+        assert_eq!(val["containerEnv"]["FOO"], "bar");
+        assert_eq!(val["mounts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parse_jsonc_strips_line_comments() {
+        let input = r#"{
+  // This is a comment
+  "name": "test"
+}"#;
+        let val = parse_jsonc(input).unwrap();
+        assert_eq!(val["name"], "test");
+    }
+
+    #[test]
+    fn parse_jsonc_handles_plain_json() {
+        let input = r#"{"name": "test", "arr": [1, 2]}"#;
+        let val = parse_jsonc(input).unwrap();
+        assert_eq!(val["name"], "test");
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {
