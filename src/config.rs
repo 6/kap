@@ -110,7 +110,63 @@ impl Config {
         if let Some(global) = Self::find_global() {
             config.merge_global(global);
         }
+        config.validate()?;
         Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        // CLI tools
+        if let Some(ref cli) = self.cli {
+            let mut seen = std::collections::HashSet::new();
+            for tool in &cli.tools {
+                if tool.name.is_empty() {
+                    anyhow::bail!("CLI tool has empty name");
+                }
+                if !seen.insert(&tool.name) {
+                    anyhow::bail!("CLI tool '{}': duplicate tool name", tool.name);
+                }
+                if tool.mode == CliToolMode::Direct
+                    && (!tool.allow.is_empty() || !tool.deny.is_empty())
+                {
+                    anyhow::bail!(
+                        "CLI tool '{}': allow/deny are not supported in direct mode (the command runs locally, not through the proxy)",
+                        tool.name
+                    );
+                }
+                if tool.mode == CliToolMode::Proxy && tool.allow.is_empty() && tool.deny.is_empty()
+                {
+                    anyhow::bail!(
+                        "CLI tool '{}': proxy mode requires at least one allow pattern (use allow = [\"*\"] to allow all commands)",
+                        tool.name
+                    );
+                }
+            }
+        }
+        // MCP servers
+        if let Some(ref mcp) = self.mcp {
+            let mut seen = std::collections::HashSet::new();
+            for server in &mcp.servers {
+                if server.name.is_empty() {
+                    anyhow::bail!("MCP server has empty name");
+                }
+                if !seen.insert(&server.name) {
+                    anyhow::bail!("MCP server '{}': duplicate server name", server.name);
+                }
+                if server.allow.is_empty() {
+                    anyhow::bail!(
+                        "MCP server '{}': requires at least one allow pattern (use allow = [\"*\"] to allow all tools)",
+                        server.name
+                    );
+                }
+            }
+        }
+        // Domain allowlist
+        if self.proxy.network.allow.is_empty() {
+            eprintln!(
+                "[config] warning: no allowed domains configured — all outbound traffic will be blocked"
+            );
+        }
+        Ok(())
     }
 
     /// Load a single config file without global merge.
@@ -805,5 +861,152 @@ name = "gh"
         let config: Config = toml::from_str(toml).unwrap();
         let cli = config.cli.unwrap();
         assert_eq!(cli.tools[0].mode, CliToolMode::Proxy);
+    }
+
+    #[test]
+    fn validate_direct_with_allow_fails() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+mode = "direct"
+allow = ["pr *"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("allow/deny are not supported in direct mode")
+        );
+    }
+
+    #[test]
+    fn validate_direct_with_deny_fails() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+mode = "direct"
+deny = ["auth *"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("allow/deny are not supported in direct mode")
+        );
+    }
+
+    #[test]
+    fn validate_direct_without_allow_deny_passes() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+mode = "direct"
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_proxy_with_allow_deny_passes() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+allow = ["pr *"]
+deny = ["auth *"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_duplicate_cli_tool_names_fails() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+allow = ["*"]
+[[cli.tools]]
+name = "gh"
+allow = ["*"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_duplicate_mcp_server_names_fails() {
+        let toml = r#"
+[mcp]
+[[mcp.servers]]
+name = "github"
+allow = ["*"]
+[[mcp.servers]]
+name = "github"
+allow = ["*"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_proxy_without_allow_fails() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = "gh"
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("requires at least one allow pattern")
+        );
+    }
+
+    #[test]
+    fn validate_mcp_server_without_allow_fails() {
+        let toml = r#"
+[mcp]
+[[mcp.servers]]
+name = "github"
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("requires at least one allow pattern")
+        );
+    }
+
+    #[test]
+    fn validate_empty_tool_name_fails() {
+        let toml = r#"
+[cli]
+[[cli.tools]]
+name = ""
+allow = ["*"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("empty name"));
+    }
+
+    #[test]
+    fn validate_empty_mcp_server_name_fails() {
+        let toml = r#"
+[mcp]
+[[mcp.servers]]
+name = ""
+allow = ["*"]
+"#;
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("empty name"));
     }
 }
