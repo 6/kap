@@ -9,9 +9,12 @@ use std::process::Command;
 pub fn push() -> Result<()> {
     // 1. Verify we're in the kap source directory
     let dockerfile = ".devcontainer/Dockerfile";
-    if !std::path::Path::new(dockerfile).exists() {
+    let is_kap_repo = std::fs::read_to_string("Cargo.toml")
+        .map(|c| c.contains("name = \"kap\""))
+        .unwrap_or(false);
+    if !is_kap_repo || !std::path::Path::new(dockerfile).exists() {
         anyhow::bail!(
-            "No .devcontainer/Dockerfile found. Run `kap dev push` from the kap source directory."
+            "This must be run from the kap source directory (where Cargo.toml defines the kap crate)."
         );
     }
 
