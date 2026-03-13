@@ -98,10 +98,12 @@ pub fn push() -> Result<()> {
     // Clean up temp binary
     let _ = std::fs::remove_file(&tmp_binary);
 
-    eprintln!(
-        "[dev] pushed to {} sidecar(s). Run `kap up` in each project to bring app containers back.",
-        sidecars.len()
-    );
+    eprintln!();
+    eprintln!("[dev] pushed to {} sidecar(s). Next steps:", sidecars.len());
+    eprintln!("  cd <project> && kap up     bring app containers back");
+    eprintln!();
+    eprintln!("  WARNING: do NOT use --reset, it will pull the published image");
+    eprintln!("  and overwrite the dev binary you just pushed.");
     Ok(())
 }
 
