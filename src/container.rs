@@ -12,6 +12,17 @@ pub fn up(reset: bool) -> Result<()> {
     require_devcontainer()?;
     let workspace = workspace_folder()?;
 
+    // On --reset, pull the latest sidecar image so we don't reuse a stale cache.
+    if reset && let Some(image) = sidecar_image() {
+        eprintln!("Pulling {image}...");
+        let _ = Command::new("docker")
+            .args(["pull", &image])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status();
+    }
+
     let mut cmd = Command::new("devcontainer");
     cmd.arg("up").arg("--workspace-folder").arg(&workspace);
 
@@ -268,6 +279,14 @@ fn find_sidecar() -> Option<String> {
         .lines()
         .find(|n| n.contains("kap-kap") || n.ends_with("-kap-1"))
         .map(String::from)
+}
+
+/// Read the sidecar image from .devcontainer/kap.toml (if it uses an image, not a build).
+fn sidecar_image() -> Option<String> {
+    let content = std::fs::read_to_string(".devcontainer/kap.toml").ok()?;
+    let config: crate::config::Config = toml::from_str(&content).ok()?;
+    let compose = config.compose.unwrap_or_default();
+    compose.sidecar_image().map(String::from)
 }
 
 /// Check that `kap init` has been run in the current directory.

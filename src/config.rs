@@ -245,9 +245,18 @@ fn upstream_from_auth_file(auth_dir: &str, name: &str) -> Option<String> {
         .and_then(|v| v["upstream"].as_str().map(String::from))
 }
 
-const DEFAULT_IMAGE: &str = "ghcr.io/6/kap:latest";
+pub const DEFAULT_IMAGE: &str = "ghcr.io/6/kap:latest";
 
 impl ComposeConfig {
+    /// Return the pullable sidecar image, or `None` if using a local build.
+    pub fn sidecar_image(&self) -> Option<&str> {
+        if self.build.is_some() {
+            None
+        } else {
+            Some(self.image.as_deref().unwrap_or(DEFAULT_IMAGE))
+        }
+    }
+
     /// Render the YAML for the kap service's image or build section.
     pub fn image_yaml(&self, indent: &str) -> String {
         if let Some(ref build) = self.build {
@@ -499,6 +508,34 @@ build = { context = "..", dockerfile = ".devcontainer/Dockerfile", target = "pro
         let compose = ComposeConfig::default();
         let yaml = compose.image_yaml("    ");
         assert_eq!(yaml, format!("    image: {DEFAULT_IMAGE}"));
+    }
+
+    #[test]
+    fn sidecar_image_default() {
+        let compose = ComposeConfig::default();
+        assert_eq!(compose.sidecar_image(), Some(DEFAULT_IMAGE));
+    }
+
+    #[test]
+    fn sidecar_image_custom() {
+        let compose = ComposeConfig {
+            image: Some("myregistry/kap:v1".to_string()),
+            build: None,
+        };
+        assert_eq!(compose.sidecar_image(), Some("myregistry/kap:v1"));
+    }
+
+    #[test]
+    fn sidecar_image_build_returns_none() {
+        let compose = ComposeConfig {
+            image: None,
+            build: Some(ComposeBuild {
+                context: "..".to_string(),
+                dockerfile: None,
+                target: None,
+            }),
+        };
+        assert_eq!(compose.sidecar_image(), None);
     }
 
     #[test]
