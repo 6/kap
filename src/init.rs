@@ -162,7 +162,7 @@ pub fn generate_overlay(
     // via apt), ensuring the shim always wins regardless of PATH ordering.
     // The shim calls kap sidecar-cli-shim which POSTs to the sidecar; the sidecar
     // decides proxy vs direct mode based on the current (hot-reloaded) config.
-    let (cli_configs_top, cli_configs_svc) = if let Some(ref tools) = cli_tool_names {
+    let (cli_configs_top, cli_configs_svc) = if let Some(tools) = cli_tool_names {
         let top = r#"configs:
   cli-shim:
     content: |
