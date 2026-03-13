@@ -531,7 +531,10 @@ mod tests {
     fn tool_result_error_shows_prefix() {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"command not found","is_error":true}]},"uuid":"1","timestamp":"t"}"#;
         let events = parse_session_events(jsonl);
-        assert_eq!(events[0].summary.as_deref(), Some("(error) command not found"));
+        assert_eq!(
+            events[0].summary.as_deref(),
+            Some("(error) command not found")
+        );
     }
 
     #[test]
