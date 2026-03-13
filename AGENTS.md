@@ -21,7 +21,7 @@ Single Rust binary with five components:
 1. **Domain proxy** (:3128): HTTP/HTTPS forward proxy with domain allowlist. Docker Compose with an internal network ensures the app container has no external route except through this proxy.
 2. **DNS forwarder** (:53): only resolves domains in the allowlist, returns NXDOMAIN for everything else. Prevents DNS exfiltration. DO NOT remove this thinking it's redundant with the domain proxy; DNS exfiltration doesn't use HTTP.
 3. **MCP proxy** (:3129): reverse proxy for remote Streamable HTTP MCP servers. Tool-level allow/deny filtering and credential isolation. Only starts when `[mcp]` is in config. Auth stored in `~/.kap/auth/` via `kap mcp add`; servers must be listed in kap.toml with `allow`.
-4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Credentials stay on the sidecar; a shim is mounted via Docker Compose configs as each tool name (busybox pattern via `sidecar-cli-shim`). Per-tool allow/deny in `[[cli.tools]]` config.
+4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Two modes per tool: `mode = "proxy"` (default) runs the command on the sidecar, returning stdout/stderr; `mode = "direct"` returns credentials to the shim, which exec's the real binary locally (needed for commands that write files, e.g. `gh run download`). Shims live on the shared `kap-bin` volume at `/opt/kap/bin/`, managed by the sidecar at runtime. Per-tool allow/deny in `[[cli.tools]]` config (proxy mode only).
 5. **Remote access daemon** (:19420): runs on the host (not in Docker). HTTP server with token-based auth for monitoring and steering devcontainers from a phone. QR code pairing, WebSocket streaming, web UI served from the binary. Start with `kap remote start`.
 
 ## Key modules
@@ -39,14 +39,15 @@ Single Rust binary with five components:
 - `src/mcp/jsonrpc.rs`:JSON-RPC 2.0 types, tools/list filtering, tools/call gating
 - `src/mcp/upstream.rs`:HTTPS client to upstream MCP servers, token injection + refresh
 - `src/mcp/auth.rs`:`kap mcp add` OAuth flow: metadata discovery, dynamic client registration, PKCE, browser callback
-- `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config
+- `src/reload.rs`:hot-reload config watcher (polls kap.toml, swaps shared state), `Shared<T>` type, CLI shim writer
+- `src/init.rs`:scaffolds `.devcontainer/` files, generates compose overlay from `[compose]` config, JSONC parser for devcontainer.json
 - `src/init_env.rs`:`kap sidecar-init` (initializeCommand); regenerates compose overlay and `.env`
 - `src/mcp_cmd.rs`:`kap mcp` subcommands (add, get, list, remove)
 - `src/container.rs`:devcontainer lifecycle (up, down, exec, list)
 - `src/status.rs`:health checks (proxy, DNS, auth mount, log path)
-- `src/cli/mod.rs`:CLI proxy HTTP listener, process spawning, multi-tool routing
-- `src/cli/filter.rs`:command allow/deny filtering (generic, per-tool)
-- `src/cli/shim.rs`:`kap sidecar-cli-shim` (runs in app container, forwards CLI commands to sidecar proxy)
+- `src/cli/mod.rs`:CLI proxy HTTP listener, proxy/direct mode dispatch, multi-tool routing
+- `src/cli/filter.rs`:command allow/deny filtering (generic, per-tool, proxy mode only)
+- `src/cli/shim.rs`:`kap sidecar-cli-shim` (runs in app container). Proxy mode: outputs sidecar response. Direct mode: decodes env vars from sidecar, finds real binary, exec's it.
 - `src/check.rs`:proxy health check (for Docker healthcheck)
 - `src/remote/mod.rs`:HTTP server, routing, auth middleware for remote access daemon
 - `src/remote/auth.rs`:QR code pairing, token management, device lifecycle
@@ -78,7 +79,7 @@ kap exec kap status                       # verify all checks pass
 kap exec .devcontainer/smoke-test.sh       # run smoke tests
 ```
 
-`--reset` is required whenever `.env` or the overlay template change. Without it, `kap up` reuses the existing container with stale env vars and volume mounts. `--reset` also clears proxy logs.
+`--reset` is only required for structural changes: `[compose]` (image/build), `ssh_agent`, or network/subnet changes. Config changes to `kap.toml` (allowlists, CLI tool modes, MCP tool filters) are hot-reloaded by the sidecar every 2 seconds — no restart needed. `--reset` also clears proxy logs.
 
 ## Compose overlay
 
@@ -89,6 +90,23 @@ The `[compose]` section in `kap.toml` controls how the kap sidecar image is sour
 - Build from source: `[compose] build = { context = "..", dockerfile = "...", target = "..." }`
 
 DO NOT edit `docker-compose.kap.yml` directly. Changes will be overwritten. Edit `kap.toml` instead.
+
+## CLI shims
+
+CLI tool shims live on the shared `kap-bin` volume at `/opt/kap/bin/`, NOT as Docker Compose configs. The sidecar writes shim scripts on startup and updates them on config reload. `remoteEnv.PATH` in devcontainer.json prepends `/opt/kap/bin` so shims take precedence.
+
+Each shim calls `kap sidecar-cli-shim <tool> <args>`, which POSTs to the sidecar. The sidecar decides per-request whether to proxy or direct based on the current (hot-reloaded) config:
+- **Proxy mode** (`mode = "proxy"`, default): sidecar executes the command, returns stdout/stderr/exit code. Credentials never enter the app container.
+- **Direct mode** (`mode = "direct"`): sidecar returns env vars (e.g. `GH_TOKEN`), shim exec's the real binary locally. Needed for commands that write files (e.g. `gh run download`). The tool must be installed in the app container.
+
+## Hot-reload
+
+The sidecar polls `kap.toml` every 2 seconds using content hashing (not mtime, which is unreliable with Docker Desktop macOS bind mounts). On change, it atomically swaps:
+- Domain allowlist (HTTP proxy + DNS forwarder)
+- CLI tool configs (modes, filters, env vars) + shim scripts on the shared volume
+- MCP tool filters (allow/deny)
+
+Uses `Arc<RwLock<Arc<T>>>` for shared state — readers clone an inner Arc (~1ns), the reloader briefly holds a write lock to swap.
 
 ## SSH agent forwarding
 
@@ -103,3 +121,5 @@ Controlled by `ssh_agent = true` (default) in `kap.toml`. The overlay generation
 The domain proxy is a domain-level gate (not a request-level firewall). For HTTPS, it sees `CONNECT domain:443` and validates that the TLS SNI in the ClientHello matches the CONNECT target (blocking SNI-mismatch routing attacks), but cannot inspect inside the encrypted TLS tunnel. No MITM.
 
 The MCP proxy adds tool-level control: it inspects JSON-RPC `tools/list` and `tools/call` between the agent and remote MCP servers. Credentials (OAuth tokens, API keys) live on the proxy sidecar and never enter the app container.
+
+The CLI proxy in `mode = "proxy"` keeps credentials on the sidecar. In `mode = "direct"`, credentials are sent to the app container at exec time — the domain proxy still controls what the container can reach, limiting blast radius.
