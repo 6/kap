@@ -461,7 +461,7 @@ async fn handle_agent_message(
     // in common locations and cd to the workspace.
     let session_id_owned = session_id.to_string();
     let cmd = format!(
-        "pkill -INT -f claude 2>/dev/null; sleep 1; \
+        "trap '' INT; pkill -INT -f claude 2>/dev/null; trap - INT; sleep 1; \
          CLAUDE=$(command -v claude 2>/dev/null || \
            find /home/*/.local/bin /root/.local/bin -name claude 2>/dev/null | head -1); \
          [ -z \"$CLAUDE\" ] && echo 'claude not found' >&2 && exit 1; \
