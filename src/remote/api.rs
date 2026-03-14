@@ -27,7 +27,9 @@ pub async fn handle(
         (hyper::Method::GET, "/api/agent/sessions") => handle_agent_sessions(&req, state).await,
         (hyper::Method::GET, p) if p.starts_with("/api/agent/session/") => {
             let rest = &p["/api/agent/session/".len()..];
-            if let Some(id) = rest.strip_suffix("/diff") {
+            if let Some(id) = rest.strip_suffix("/status") {
+                handle_agent_status(&req, id).await
+            } else if let Some(id) = rest.strip_suffix("/diff") {
                 handle_agent_diff(&req, id, state).await
             } else {
                 handle_agent_session(&req, rest, state).await
@@ -284,6 +286,34 @@ async fn handle_agent_session(
             },
         )),
     }
+}
+
+async fn handle_agent_status(
+    req: &Request<hyper::body::Incoming>,
+    _session_id: &str,
+) -> Result<Response<Body>> {
+    let (app, _sidecar) = match resolve_containers(req) {
+        Ok(pair) => pair,
+        Err(_) => {
+            return Ok(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &ErrorBody {
+                    error: "no containers running",
+                },
+            ));
+        }
+    };
+
+    let running = agent::is_agent_running(&app).is_some();
+    Ok(json_response(
+        StatusCode::OK,
+        &AgentStatusResponse { running },
+    ))
+}
+
+#[derive(Serialize)]
+struct AgentStatusResponse {
+    running: bool,
 }
 
 async fn handle_agent_diff(
@@ -644,6 +674,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["sent"], true);
         assert_eq!(v["session_id"], "abc-123");
+    }
+
+    #[test]
+    fn agent_status_response_serializes() {
+        let resp = AgentStatusResponse { running: true };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["running"], true);
+
+        let resp = AgentStatusResponse { running: false };
+        let json = serde_json::to_string(&resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["running"], false);
     }
 
     #[test]

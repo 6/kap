@@ -77,7 +77,8 @@ body {
 .event .role.user { color: var(--accent); }
 .event .role.assistant { color: var(--green); }
 .event .role.system { color: var(--yellow); }
-.event .summary { margin-top: 2px; color: var(--fg); word-break: break-word; }
+.event .summary { margin-top: 2px; color: var(--fg); word-break: break-word; max-height: 3.5em; overflow: hidden; cursor: pointer; transition: max-height 0.2s; }
+.event .summary.expanded { max-height: none; }
 .event .tool { color: var(--yellow); font-size: 0.85em; }
 .event .ts { color: var(--dim); font-size: 0.8em; }
 
@@ -105,6 +106,10 @@ body {
   font-size: inherit; cursor: pointer;
 }
 .input-row button:disabled { opacity: 0.4; cursor: default; }
+.steer-error { padding: 4px 12px; font-size: 0.8em; color: var(--red); }
+#agent-detail.open { display: flex; flex-direction: column; height: calc(100vh - 100px); }
+#agent-detail .input-row { flex-shrink: 0; }
+#agent-detail #session-events { flex: 1; overflow-y: auto; padding-bottom: 8px; }
 .btn-danger {
   padding: 8px 16px; border-radius: 6px; border: 1px solid var(--red);
   background: none; color: var(--red); font-family: inherit;
@@ -230,6 +235,8 @@ let logWs = null;
 let agentWs = null;
 let logFilter = 'all';
 let currentSession = null;
+let agentRunning = false;
+let statusPollTimer = null;
 let selectedProject = localStorage.getItem('kap_project') || null;
 
 // --- Auth ---
@@ -450,24 +457,33 @@ async function openSession(id) {
   currentSession = id;
   document.getElementById('agent-sessions').style.display = 'none';
   const el = document.getElementById('agent-detail');
-  el.style.display = 'block';
+  el.className = 'open';
   el.innerHTML = '<div class="empty">loading...</div>';
 
   try {
     const events = await apiFetch(`/api/agent/session/${id}`);
     events.reverse();
-    let html = `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
-    html += `<div style="margin:8px 0"><button class="btn-danger" onclick="cancelAgent('${esc(id)}')">Cancel agent</button></div>`;
+    let html = `<div style="flex-shrink:0">`;
+    html += `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">`;
+    html += `<span id="agent-state" style="font-size:0.85em;color:var(--dim)"><span class="status-dot" style="background:var(--dim)"></span>checking...</span>`;
+    html += `<button class="btn-danger" style="margin:0" onclick="cancelAgent('${esc(id)}')">Cancel</button>`;
+    html += `</div></div>`;
     html += '<div id="session-events">';
     for (const ev of events) {
       html += renderEvent(ev);
     }
     html += '</div>';
+    html += `<div class="input-row" id="steer-bar">`;
+    html += `<input type="text" id="msg-input" placeholder="Steer the agent..." autocomplete="off" autocorrect="off" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage('${esc(id)}')}">`;
+    html += `<button id="steer-btn" onclick="sendMessage('${esc(id)}')">Send</button>`;
+    html += `</div>`;
     el.innerHTML = html;
 
-    // Connect WebSocket for live updates
     connectAgentWs(id);
+    pollAgentStatus(id);
   } catch(e) {
+    el.className = 'open';
     el.innerHTML = `<span class="back-btn" onclick="showSessionsList()">← back</span><div class="empty">${esc(e.message)}</div>`;
   }
 }
@@ -481,7 +497,7 @@ function renderEvent(ev) {
     summary = `<span class="tool">${esc(ev.tool_name)}</span> ${summary}`;
   }
   if (!ev.summary && !ev.tool_name) summary = `<span style="color:var(--dim)">${esc(ev.type)}</span>`;
-  return `<div class="event"><span class="role ${roleClass}">${esc(role)}</span> <span class="ts">${ts}</span><div class="summary">${summary}</div></div>`;
+  return `<div class="event"><span class="role ${roleClass}">${esc(role)}</span> <span class="ts">${ts}</span><div class="summary" onclick="this.classList.toggle('expanded')">${summary}</div></div>`;
 }
 
 function connectAgentWs(id) {
@@ -499,8 +515,11 @@ function connectAgentWs(id) {
 function showSessionsList() {
   currentSession = null;
   if (agentWs) { agentWs.close(); agentWs = null; }
+  if (statusPollTimer) { clearTimeout(statusPollTimer); statusPollTimer = null; }
   document.getElementById('agent-sessions').style.display = '';
-  document.getElementById('agent-detail').style.display = 'none';
+  const detail = document.getElementById('agent-detail');
+  detail.style.display = 'none';
+  detail.className = '';
   loadSessions();
 }
 
@@ -514,12 +533,60 @@ async function cancelAgent(id) {
 
 async function sendMessage(id) {
   const input = document.getElementById('msg-input');
+  const btn = document.getElementById('steer-btn');
   const msg = input.value.trim();
   if (!msg) return;
+  btn.disabled = true;
+  btn.textContent = '...';
   try {
-    await apiFetch(`/api/agent/session/${id}/message`, { method: 'POST', body: { message: msg } });
-    input.value = '';
-  } catch(e) { alert('Error: ' + e.message); }
+    const res = await apiFetch(`/api/agent/session/${id}/message`, { method: 'POST', body: { message: msg } });
+    if (res.sent) {
+      input.value = '';
+      agentRunning = true;
+      updateSteerBar();
+    } else {
+      showSteerError(res.error || 'Failed to send');
+    }
+  } catch(e) { showSteerError(e.message || 'Network error'); }
+}
+
+function showSteerError(msg) {
+  const bar = document.getElementById('steer-bar');
+  if (!bar) return;
+  const existing = bar.querySelector('.steer-error');
+  if (existing) existing.remove();
+  const err = document.createElement('div');
+  err.className = 'steer-error';
+  err.textContent = msg;
+  bar.prepend(err);
+  setTimeout(() => err.remove(), 4000);
+}
+
+async function pollAgentStatus(id) {
+  try {
+    const res = await apiFetch(`/api/agent/session/${id}/status`);
+    agentRunning = res.running;
+    updateSteerBar();
+  } catch(_) {}
+  statusPollTimer = setTimeout(() => pollAgentStatus(id), 3000);
+}
+
+function updateSteerBar() {
+  const btn = document.getElementById('steer-btn');
+  const input = document.getElementById('msg-input');
+  const indicator = document.getElementById('agent-state');
+  if (!btn || !input) return;
+  if (agentRunning) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    input.placeholder = 'Agent is working...';
+    if (indicator) indicator.innerHTML = '<span class="status-dot up"></span>running';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+    input.placeholder = 'Steer the agent...';
+    if (indicator) indicator.innerHTML = '<span class="status-dot" style="background:var(--dim)"></span>idle';
+  }
 }
 
 // --- Settings ---
