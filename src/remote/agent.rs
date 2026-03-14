@@ -196,9 +196,11 @@ pub fn parse_session_events(jsonl: &str) -> Vec<SessionEvent> {
             let raw: RawEvent = serde_json::from_str(line).ok()?;
             let event_type = raw.event_type.as_deref()?;
 
-            // Skip noise: progress events and file-history-snapshots
+            // Skip noise: internal bookkeeping events
             match event_type {
-                "progress" | "file-history-snapshot" => return None,
+                "progress" | "file-history-snapshot" | "last-prompt" | "queue-operation" => {
+                    return None;
+                }
                 _ => {}
             }
 
@@ -307,11 +309,8 @@ fn tool_result_summary(item: &serde_json::Value) -> String {
 
 /// Extract a human-readable summary from the event.
 fn extract_summary(event_type: &str, msg: Option<&RawMessage>) -> Option<String> {
-    // System and queue events don't need a message field
-    match event_type {
-        "system" => return Some("system event".to_string()),
-        "queue-operation" => return None,
-        _ => {}
+    if event_type == "system" {
+        return Some("system event".to_string());
     }
 
     let msg = msg?;
@@ -661,12 +660,17 @@ mod tests {
     }
 
     #[test]
-    fn queue_operation_has_no_summary() {
+    fn queue_operation_filtered_out() {
         let jsonl = r#"{"type":"queue-operation","operation":"enqueue","content":"do something","timestamp":"2026-03-07T10:00:00Z"}"#;
         let events = parse_session_events(jsonl);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "queue-operation");
-        assert!(events[0].summary.is_none());
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn last_prompt_filtered_out() {
+        let jsonl = r#"{"type":"last-prompt","lastPrompt":"fix tests","sessionId":"abc"}"#;
+        let events = parse_session_events(jsonl);
+        assert!(events.is_empty());
     }
 
     #[test]

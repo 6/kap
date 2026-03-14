@@ -238,6 +238,7 @@ let currentSession = null;
 let agentRunning = false;
 let statusPollTimer = null;
 let seenUuids = new Set();
+let autoScroll = localStorage.getItem('kap_autoscroll') !== 'false';
 let selectedProject = localStorage.getItem('kap_project') || null;
 
 // --- Auth ---
@@ -476,13 +477,15 @@ async function openSession(id) {
 
   try {
     const events = await apiFetch(`/api/agent/session/${id}`);
-    events.reverse();
     seenUuids = new Set(events.filter(e => e.uuid).map(e => e.uuid));
     let html = `<div style="flex-shrink:0">`;
     html += `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
     html += `<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">`;
     html += `<span id="agent-state" style="font-size:0.85em;color:var(--dim)"><span class="status-dot" style="background:var(--dim)"></span>checking...</span>`;
+    html += `<span style="display:flex;gap:8px;align-items:center">`;
+    html += `<label style="font-size:0.8em;color:var(--dim);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="autoscroll-toggle" ${autoScroll ? 'checked' : ''} onchange="toggleAutoScroll()"> auto-scroll</label>`;
     html += `<button class="btn-danger" style="margin:0" onclick="cancelAgent('${esc(id)}')">Cancel</button>`;
+    html += `</span>`;
     html += `</div></div>`;
     html += '<div id="session-events">';
     for (const ev of events) {
@@ -494,6 +497,8 @@ async function openSession(id) {
     html += `<button id="steer-btn" onclick="sendMessage('${esc(id)}')">Send</button>`;
     html += `</div>`;
     el.innerHTML = html;
+    const eventsEl = document.getElementById('session-events');
+    if (eventsEl) eventsEl.scrollTop = eventsEl.scrollHeight;
 
     connectAgentWs(id);
     pollAgentStatus(id);
@@ -525,7 +530,10 @@ function connectAgentWs(id) {
       if (ev.uuid && seenUuids.has(ev.uuid)) return;
       if (ev.uuid) seenUuids.add(ev.uuid);
       const container = document.getElementById('session-events');
-      if (container) container.insertAdjacentHTML('afterbegin', renderEvent(ev));
+      if (container) {
+        container.insertAdjacentHTML('beforeend', renderEvent(ev));
+        if (autoScroll) container.scrollTop = container.scrollHeight;
+      }
     } catch(_) {}
   };
 }
@@ -632,6 +640,15 @@ function loadSettings() {
   }
   const fs = localStorage.getItem('kap_fontsize');
   if (fs) document.documentElement.style.setProperty('--font-size', fs + 'px');
+}
+
+function toggleAutoScroll() {
+  autoScroll = document.getElementById('autoscroll-toggle')?.checked ?? true;
+  localStorage.setItem('kap_autoscroll', autoScroll);
+  if (autoScroll) {
+    const c = document.getElementById('session-events');
+    if (c) c.scrollTop = c.scrollHeight;
+  }
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
