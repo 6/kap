@@ -544,10 +544,10 @@ pub fn find_session_cwd(app_container: &str, session_id: &str) -> Option<String>
 /// Parse the first `cwd` field from JSONL content.
 fn parse_cwd_from_jsonl(jsonl: &str) -> Option<String> {
     for line in jsonl.lines() {
-        if let Ok(evt) = serde_json::from_str::<RawEvent>(line) {
-            if let Some(cwd) = evt.cwd {
-                return Some(cwd);
-            }
+        if let Ok(evt) = serde_json::from_str::<RawEvent>(line)
+            && let Some(cwd) = evt.cwd
+        {
+            return Some(cwd);
         }
     }
     None
