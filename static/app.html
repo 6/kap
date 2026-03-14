@@ -457,6 +457,7 @@ async function openSession(id) {
   currentSession = id;
   document.getElementById('agent-sessions').style.display = 'none';
   const el = document.getElementById('agent-detail');
+  el.style.display = '';
   el.className = 'open';
   el.innerHTML = '<div class="empty">loading...</div>';
 
@@ -483,6 +484,7 @@ async function openSession(id) {
     connectAgentWs(id);
     pollAgentStatus(id);
   } catch(e) {
+    el.style.display = '';
     el.className = 'open';
     el.innerHTML = `<span class="back-btn" onclick="showSessionsList()">← back</span><div class="empty">${esc(e.message)}</div>`;
   }
