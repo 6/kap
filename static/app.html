@@ -484,7 +484,7 @@ async function openSession(id) {
     html += `<span id="agent-state" style="font-size:0.85em;color:var(--dim)"><span class="status-dot" style="background:var(--dim)"></span>checking...</span>`;
     html += `<span style="display:flex;gap:8px;align-items:center">`;
     html += `<label style="font-size:0.8em;color:var(--dim);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="autoscroll-toggle" ${autoScroll ? 'checked' : ''} onchange="toggleAutoScroll()"> auto-scroll</label>`;
-    html += `<button class="btn-danger" style="margin:0" onclick="cancelAgent('${esc(id)}')">Cancel</button>`;
+    html += `<button class="btn-danger" style="margin:0" onclick="cancelAgent('${esc(id)}')">Stop</button>`;
     html += `</span>`;
     html += `</div></div>`;
     html += '<div id="session-events">';
@@ -550,7 +550,7 @@ function showSessionsList() {
 }
 
 async function cancelAgent(id) {
-  if (!confirm('Send SIGINT to the running agent?')) return;
+  if (!confirm('Stop the running agent?')) return;
   try {
     const res = await apiFetch(`/api/agent/session/${id}/cancel`, { method: 'POST' });
     alert(res.message || 'done');
