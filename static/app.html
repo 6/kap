@@ -422,7 +422,7 @@ async function connectLogs() {
 function makeLogLine(entry) {
   const div = document.createElement('div');
   div.className = 'log-line';
-  const ts = entry.ts ? entry.ts.split('T')[1]?.slice(0,8) : '';
+  const ts = entry.ts ? entry.ts.slice(5,10) + ' ' + entry.ts.split('T')[1]?.slice(0,8) : '';
   div.innerHTML = `<span class="ts">${ts}</span> <span class="${entry.action}">${entry.action?.slice(0,1).toUpperCase()}</span> <span class="domain">${esc(entry.domain || '?')}</span>`;
   return div;
 }
