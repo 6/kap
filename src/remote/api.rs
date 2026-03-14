@@ -333,8 +333,7 @@ async fn handle_agent_diff(
         }
     };
 
-    let _ = session_id; // diff is repo-wide, not session-specific
-    match agent::get_diff(&app) {
+    match agent::get_diff(&app, session_id) {
         Ok(diff) => Ok(json_response(StatusCode::OK, &DiffResponse { diff })),
         Err(e) => Ok(json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -367,11 +366,11 @@ async fn handle_agent_cancel(
         }
     };
 
-    let _ = session_id; // cancel kills any running claude process
-    let pid = agent::is_agent_running(&app);
+    let pid = agent::find_pid_for_session(&app, session_id);
     match pid {
-        Some(_) => {
-            let exit = containers::exec_exit_code(&app, &["pkill", "-INT", "-f", "claude"]);
+        Some(p) => {
+            let exit =
+                containers::exec_exit_code(&app, &["kill", "-INT", &p.to_string()]);
             if exit == 0 {
                 Ok(json_response(
                     StatusCode::OK,
@@ -456,18 +455,29 @@ async fn handle_agent_message(
         ));
     }
 
-    // Stop any running agent, then resume with the new message.
-    // docker exec doesn't get devcontainer remoteEnv, so we manually find claude
-    // in common locations and cd to the workspace.
+    // Stop the specific session's agent, then resume with the new message.
+    // Uses targeted kill (by PID) instead of blanket pkill to avoid killing
+    // other agents in multi-agent setups (e.g. flocks).
     let session_id_owned = session_id.to_string();
+    let existing_pid = agent::find_pid_for_session(&app, &session_id_owned);
+    let session_cwd = agent::find_session_cwd(&app, &session_id_owned)
+        .unwrap_or_else(|| "/workspace".to_string());
+
+    let kill_cmd = match existing_pid {
+        Some(pid) => format!(
+            "trap '' INT; kill -INT {pid} 2>/dev/null; trap - INT; sleep 1; "
+        ),
+        None => String::new(),
+    };
     let cmd = format!(
-        "trap '' INT; pkill -INT -f claude 2>/dev/null; trap - INT; sleep 1; \
+        "{kill_cmd}\
          CLAUDE=$(command -v claude 2>/dev/null || \
            find /home/*/.local/bin /root/.local/bin -name claude 2>/dev/null | head -1); \
          [ -z \"$CLAUDE\" ] && echo 'claude not found' >&2 && exit 1; \
-         cd /workspace 2>/dev/null || cd ~; \
+         cd {} 2>/dev/null || cd /workspace 2>/dev/null || cd ~; \
          LOG=$(mktemp /tmp/kap-steer.XXXXXX); \
          nohup \"$CLAUDE\" --resume {} --dangerously-skip-permissions -p {} > \"$LOG\" 2>&1 &",
+        shell_escape(&session_cwd),
         shell_escape(&session_id_owned),
         shell_escape(&msg_req.message),
     );

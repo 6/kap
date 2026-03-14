@@ -11,6 +11,10 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     pub last_event: Option<String>,
     pub event_count: usize,
 }
@@ -53,6 +57,8 @@ struct RawEvent {
     #[allow(dead_code)]
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,10 +118,14 @@ done"#,
 
         let mut branch = None;
         let mut task = None;
+        let mut cwd = None;
         for line in head.lines() {
             if let Ok(evt) = serde_json::from_str::<RawEvent>(line) {
                 if branch.is_none() {
                     branch = evt.git_branch;
+                }
+                if cwd.is_none() {
+                    cwd = evt.cwd;
                 }
                 // Extract first user message as the session task/title
                 if task.is_none()
@@ -127,6 +137,7 @@ done"#,
                 }
             }
         }
+        let worktree = extract_worktree_name(cwd.as_deref());
 
         // Get last timestamp from the tail of the file
         let mut last_ts = None;
@@ -144,6 +155,8 @@ done"#,
             project,
             task,
             branch,
+            cwd,
+            worktree,
             last_event: last_ts,
             event_count,
         });
@@ -510,10 +523,97 @@ pub fn is_agent_running(app_container: &str) -> Option<u32> {
     output.lines().next()?.trim().parse().ok()
 }
 
-/// Get the git diff from the app container's workspace.
-pub fn get_diff(app_container: &str) -> Result<String> {
-    containers::exec_in(app_container, &["git", "diff"])
-        .ok_or_else(|| anyhow::anyhow!("failed to get git diff"))
+/// Get the git diff from the app container, using the session's working directory
+/// if available (supports worktree-based agents).
+pub fn get_diff(app_container: &str, session_id: &str) -> Result<String> {
+    let cwd = find_session_cwd(app_container, session_id);
+    match cwd {
+        Some(dir) => containers::exec_in(app_container, &["git", "-C", &dir, "diff"]),
+        None => containers::exec_in(app_container, &["git", "diff"]),
+    }
+    .ok_or_else(|| anyhow::anyhow!("failed to get git diff"))
+}
+
+/// Extract the working directory from a session's JSONL file.
+pub fn find_session_cwd(app_container: &str, session_id: &str) -> Option<String> {
+    let path = find_session_path(app_container, session_id).ok()?;
+    let output = containers::exec_in(app_container, &["head", "-5", &path])?;
+    parse_cwd_from_jsonl(&output)
+}
+
+/// Parse the first `cwd` field from JSONL content.
+fn parse_cwd_from_jsonl(jsonl: &str) -> Option<String> {
+    for line in jsonl.lines() {
+        if let Ok(evt) = serde_json::from_str::<RawEvent>(line) {
+            if let Some(cwd) = evt.cwd {
+                return Some(cwd);
+            }
+        }
+    }
+    None
+}
+
+/// Find the PID of the claude process for a specific session.
+///
+/// If only one claude process is running, returns it directly (backward compat).
+/// If multiple, matches by comparing each process's `/proc/<pid>/cwd` against
+/// the session's working directory from its JSONL file.
+pub fn find_pid_for_session(app_container: &str, session_id: &str) -> Option<u32> {
+    let pids = find_all_claude_pids(app_container)?;
+
+    if pids.len() == 1 {
+        return Some(pids[0]);
+    }
+
+    // Multiple processes: match by cwd
+    let session_cwd = find_session_cwd(app_container, session_id)?;
+    let pid_list = pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = format!(
+        "for pid in {pid_list}; do \
+           cwd=$(readlink /proc/$pid/cwd 2>/dev/null) && \
+           [ \"$cwd\" = {} ] && echo $pid && break; \
+         done",
+        shell_escape(&session_cwd),
+    );
+    let output = containers::exec_in(app_container, &["sh", "-c", &cmd])?;
+    output.trim().parse().ok()
+}
+
+/// Get all PIDs of claude processes in the container.
+fn find_all_claude_pids(app_container: &str) -> Option<Vec<u32>> {
+    let output = containers::exec_in(app_container, &["pgrep", "-f", "claude"])?;
+    let pids: Vec<u32> = output
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect();
+    if pids.is_empty() {
+        None
+    } else {
+        Some(pids)
+    }
+}
+
+/// Extract worktree name from a cwd path.
+/// e.g. `/workspace/.worktrees/flocks-fix-auth` → `Some("flocks-fix-auth")`
+fn extract_worktree_name(cwd: Option<&str>) -> Option<String> {
+    let cwd = cwd?;
+    let idx = cwd.find("/.worktrees/")?;
+    let after = &cwd[idx + "/.worktrees/".len()..];
+    let name = after.split('/').next().unwrap_or(after);
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// Shell-escape a string for safe embedding in sh -c commands.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -855,6 +955,91 @@ mod tests {
     }
 
     #[test]
+    fn parse_cwd_from_jsonl_extracts_cwd() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"fix tests"},"cwd":"/workspace/.worktrees/flocks-fix-auth","timestamp":"2026-03-07T10:00:00Z","uuid":"1"}"#;
+        assert_eq!(
+            parse_cwd_from_jsonl(jsonl),
+            Some("/workspace/.worktrees/flocks-fix-auth".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cwd_from_jsonl_skips_events_without_cwd() {
+        let jsonl = "{\"type\":\"system\",\"timestamp\":\"t\"}\n\
+                     {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"cwd\":\"/workspace\",\"timestamp\":\"t\",\"uuid\":\"1\"}";
+        assert_eq!(
+            parse_cwd_from_jsonl(jsonl),
+            Some("/workspace".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cwd_from_jsonl_returns_none_when_absent() {
+        let jsonl = r#"{"type":"system","timestamp":"t"}"#;
+        assert_eq!(parse_cwd_from_jsonl(jsonl), None);
+    }
+
+    #[test]
+    fn worktree_detected_from_cwd() {
+        assert_eq!(
+            extract_worktree_name(Some("/workspace/.worktrees/flocks-fix-auth")),
+            Some("flocks-fix-auth".to_string())
+        );
+    }
+
+    #[test]
+    fn worktree_detected_nested_path() {
+        assert_eq!(
+            extract_worktree_name(Some("/workspace/.worktrees/task-123/subdir")),
+            Some("task-123".to_string())
+        );
+    }
+
+    #[test]
+    fn no_worktree_for_regular_cwd() {
+        assert_eq!(extract_worktree_name(Some("/workspace")), None);
+    }
+
+    #[test]
+    fn no_worktree_for_none() {
+        assert_eq!(extract_worktree_name(None), None);
+    }
+
+    #[test]
+    fn session_info_includes_cwd_and_worktree() {
+        let info = SessionInfo {
+            id: "abc".into(),
+            project: "test".into(),
+            task: None,
+            branch: None,
+            cwd: Some("/workspace/.worktrees/flocks-task".into()),
+            worktree: Some("flocks-task".into()),
+            last_event: None,
+            event_count: 0,
+        };
+        let json: serde_json::Value = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["cwd"], "/workspace/.worktrees/flocks-task");
+        assert_eq!(json["worktree"], "flocks-task");
+    }
+
+    #[test]
+    fn session_info_omits_none_cwd_and_worktree() {
+        let info = SessionInfo {
+            id: "abc".into(),
+            project: "test".into(),
+            task: None,
+            branch: None,
+            cwd: None,
+            worktree: None,
+            last_event: None,
+            event_count: 0,
+        };
+        let json: serde_json::Value = serde_json::to_value(&info).unwrap();
+        assert!(json.get("cwd").is_none());
+        assert!(json.get("worktree").is_none());
+    }
+
+    #[test]
     fn session_info_includes_task() {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":"fix the auth bug"},"timestamp":"2026-03-07T10:00:00Z","uuid":"1","gitBranch":"main"}"#;
         let events = parse_session_events(jsonl);
@@ -874,6 +1059,8 @@ mod tests {
                 project: "test".into(),
                 task: None,
                 branch: None,
+                cwd: None,
+                worktree: None,
                 last_event: Some("2026-03-07T08:00:00Z".into()),
                 event_count: 5,
             },
@@ -882,6 +1069,8 @@ mod tests {
                 project: "test".into(),
                 task: None,
                 branch: None,
+                cwd: None,
+                worktree: None,
                 last_event: Some("2026-03-07T12:00:00Z".into()),
                 event_count: 10,
             },
@@ -890,6 +1079,8 @@ mod tests {
                 project: "test".into(),
                 task: None,
                 branch: None,
+                cwd: None,
+                worktree: None,
                 last_event: None,
                 event_count: 1,
             },
