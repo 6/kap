@@ -466,12 +466,32 @@ async fn handle_agent_message(
            find /home/*/.local/bin /root/.local/bin -name claude 2>/dev/null | head -1); \
          [ -z \"$CLAUDE\" ] && echo 'claude not found' >&2 && exit 1; \
          cd /workspace 2>/dev/null || cd ~; \
-         nohup \"$CLAUDE\" --resume {} --dangerously-skip-permissions -p {} > /tmp/kap-steer.log 2>&1 &",
+         LOG=$(mktemp /tmp/kap-steer.XXXXXX); \
+         nohup \"$CLAUDE\" --resume {} --dangerously-skip-permissions -p {} > \"$LOG\" 2>&1 &",
         shell_escape(&session_id_owned),
         shell_escape(&msg_req.message),
     );
+    // Run as the container's non-root user — claude refuses --dangerously-skip-permissions as root.
+    let user = containers::exec_in(
+        &app,
+        &[
+            "sh",
+            "-c",
+            "awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}' /etc/passwd",
+        ],
+    )
+    .unwrap_or_default();
+    let user = user.trim();
+
+    let mut docker_args = vec!["exec"];
+    if !user.is_empty() {
+        docker_args.push("-u");
+        docker_args.push(user);
+    }
+    docker_args.extend(&[&*app, "sh", "-c", &cmd]);
+
     let output = std::process::Command::new("docker")
-        .args(["exec", &app, "sh", "-c", &cmd])
+        .args(&docker_args)
         .output();
 
     match output {
