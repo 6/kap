@@ -457,18 +457,21 @@ async fn handle_agent_message(
     }
 
     // Stop any running agent, then resume with the new message.
-    // cd to /workspace (devcontainer default) so claude finds the project.
-    // Log to /tmp/kap-steer.log for debugging if it fails silently.
+    // docker exec doesn't get devcontainer remoteEnv, so we manually find claude
+    // in common locations and cd to the workspace.
     let session_id_owned = session_id.to_string();
     let cmd = format!(
         "pkill -INT -f claude 2>/dev/null; sleep 1; \
+         CLAUDE=$(command -v claude 2>/dev/null || \
+           find /home/*/.local/bin /root/.local/bin -name claude 2>/dev/null | head -1); \
+         [ -z \"$CLAUDE\" ] && echo 'claude not found' >&2 && exit 1; \
          cd /workspace 2>/dev/null || cd ~; \
-         nohup claude --resume {} --dangerously-skip-permissions -p {} > /tmp/kap-steer.log 2>&1 &",
+         nohup \"$CLAUDE\" --resume {} --dangerously-skip-permissions -p {} > /tmp/kap-steer.log 2>&1 &",
         shell_escape(&session_id_owned),
         shell_escape(&msg_req.message),
     );
     let output = std::process::Command::new("docker")
-        .args(["exec", &app, "bash", "-lc", &cmd])
+        .args(["exec", &app, "sh", "-c", &cmd])
         .output();
 
     match output {
