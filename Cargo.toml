@@ -1,6 +1,6 @@
 [package]
 name = "kap"
-version = "0.0.1-pre14"
+version = "0.0.1"
 edition = "2024"
 description = "Run AI agents in secure capsules. Built on devcontainers with network controls and remote access."
 license = "MIT"
