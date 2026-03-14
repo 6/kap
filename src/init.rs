@@ -316,12 +316,13 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
 struct SetupOptions {
     install_claude_code: bool,
     install_codex: bool,
+    install_gh: bool,
     ssh_signing: bool,
 }
 
 impl SetupOptions {
     fn any_enabled(&self) -> bool {
-        self.install_claude_code || self.install_codex || self.ssh_signing
+        self.install_claude_code || self.install_codex || self.install_gh || self.ssh_signing
     }
 }
 
@@ -390,11 +391,13 @@ fn ensure_1password_launch_agent() -> Result<()> {
 
 fn prompt_setup_options(yes: bool) -> SetupOptions {
     let ssh_program = detect_ssh_signing_program();
+    let gh_detected = !detect_cli_tools().is_empty();
 
     if yes {
         return SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: gh_detected,
             ssh_signing: ssh_program.is_some(),
         };
     }
@@ -405,6 +408,11 @@ fn prompt_setup_options(yes: bool) -> SetupOptions {
 
     let install_claude_code = confirm("  Install Claude Code?");
     let install_codex = confirm("  Install Codex (OpenAI)?");
+    let install_gh = if gh_detected {
+        confirm("  Install GitHub CLI in container?")
+    } else {
+        false
+    };
 
     let ssh_signing = if let Some(ref program) = ssh_program {
         let basename = program.rsplit('/').next().unwrap_or(program);
@@ -420,6 +428,7 @@ fn prompt_setup_options(yes: bool) -> SetupOptions {
     SetupOptions {
         install_claude_code,
         install_codex,
+        install_gh,
         ssh_signing,
     }
 }
@@ -452,6 +461,24 @@ fn generate_post_start_command(options: &SetupOptions) -> serde_json::Value {
             serde_json::Value::String(
                 "command -v codex >/dev/null 2>&1 || { command -v npm >/dev/null 2>&1 && npm install -g @openai/codex || true; }"
                     .to_string(),
+            ),
+        );
+    }
+    if options.install_gh {
+        obj.insert(
+            "gh".to_string(),
+            serde_json::Value::String(
+                concat!(
+                    "command -v gh >/dev/null 2>&1 || { ",
+                    "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg ",
+                    "| sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null ",
+                    "&& echo \"deb [arch=$(dpkg --print-architecture) ",
+                    "signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] ",
+                    "https://cli.github.com/packages stable main\" ",
+                    "| sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null ",
+                    "&& sudo apt-get update -qq && sudo apt-get install -y gh; }",
+                )
+                .to_string(),
             ),
         );
     }
@@ -1651,6 +1678,7 @@ mod tests {
         let none = SetupOptions {
             install_claude_code: false,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         assert!(!none.any_enabled());
@@ -1658,6 +1686,7 @@ mod tests {
         let claude = SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         assert!(claude.any_enabled());
@@ -1665,6 +1694,7 @@ mod tests {
         let codex = SetupOptions {
             install_claude_code: false,
             install_codex: true,
+            install_gh: false,
             ssh_signing: false,
         };
         assert!(codex.any_enabled());
@@ -1672,9 +1702,18 @@ mod tests {
         let ssh = SetupOptions {
             install_claude_code: false,
             install_codex: false,
+            install_gh: false,
             ssh_signing: true,
         };
         assert!(ssh.any_enabled());
+
+        let gh = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            install_gh: true,
+            ssh_signing: false,
+        };
+        assert!(gh.any_enabled());
     }
 
     #[test]
@@ -1682,6 +1721,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1700,6 +1740,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: false,
             install_codex: true,
+            install_gh: false,
             ssh_signing: false,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1713,6 +1754,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: false,
             install_codex: false,
+            install_gh: false,
             ssh_signing: true,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1722,17 +1764,35 @@ mod tests {
     }
 
     #[test]
+    fn post_start_command_gh_only() {
+        let opts = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            install_gh: true,
+            ssh_signing: false,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let obj = cmd.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        let gh_cmd = obj["gh"].as_str().unwrap();
+        assert!(gh_cmd.starts_with("command -v gh"));
+        assert!(gh_cmd.contains("github-cli"));
+    }
+
+    #[test]
     fn post_start_command_all_enabled() {
         let opts = SetupOptions {
             install_claude_code: true,
             install_codex: true,
+            install_gh: true,
             ssh_signing: true,
         };
         let cmd = generate_post_start_command(&opts);
         let obj = cmd.as_object().unwrap();
-        assert_eq!(obj.len(), 3);
+        assert_eq!(obj.len(), 4);
         assert!(obj.contains_key("claude-code"));
         assert!(obj.contains_key("codex"));
+        assert!(obj.contains_key("gh"));
         assert!(obj.contains_key("ssh-signing"));
     }
 
@@ -1741,6 +1801,7 @@ mod tests {
         let setup = SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         let json_str = generate_devcontainer_json("test", false, &setup);
@@ -1754,6 +1815,7 @@ mod tests {
         let setup = SetupOptions {
             install_claude_code: false,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         let json_str = generate_devcontainer_json("test", false, &setup);
@@ -1766,6 +1828,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1779,6 +1842,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: false,
             install_codex: true,
+            install_gh: false,
             ssh_signing: false,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1794,6 +1858,7 @@ mod tests {
         let opts = SetupOptions {
             install_claude_code: false,
             install_codex: false,
+            install_gh: false,
             ssh_signing: true,
         };
         let cmd = generate_post_start_command(&opts);
@@ -1810,14 +1875,16 @@ mod tests {
         let setup = SetupOptions {
             install_claude_code: true,
             install_codex: true,
+            install_gh: true,
             ssh_signing: true,
         };
         let json_str = generate_devcontainer_json("myproject", false, &setup);
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let psc = json["postStartCommand"].as_object().unwrap();
-        assert_eq!(psc.len(), 3);
+        assert_eq!(psc.len(), 4);
         assert!(psc.contains_key("claude-code"));
         assert!(psc.contains_key("codex"));
+        assert!(psc.contains_key("gh"));
         assert!(psc.contains_key("ssh-signing"));
         // Other fields should still be present
         assert_eq!(json["name"], "myproject");
@@ -1829,6 +1896,7 @@ mod tests {
         let setup = SetupOptions {
             install_claude_code: true,
             install_codex: false,
+            install_gh: false,
             ssh_signing: false,
         };
         let json_str = generate_devcontainer_json("test", true, &setup);
@@ -1846,16 +1914,18 @@ mod tests {
     #[test]
     fn devcontainer_json_is_valid_json_with_setup() {
         // Ensure the string-template approach produces valid JSON for all combos
-        for (claude, codex, ssh) in [
-            (false, false, false),
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
-            (true, true, true),
+        for (claude, codex, gh, ssh) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+            (true, true, true, true),
         ] {
             let setup = SetupOptions {
                 install_claude_code: claude,
                 install_codex: codex,
+                install_gh: gh,
                 ssh_signing: ssh,
             };
             for has_cli in [false, true] {
@@ -1863,7 +1933,7 @@ mod tests {
                 let parsed: Result<serde_json::Value, _> = serde_json::from_str(&json_str);
                 assert!(
                     parsed.is_ok(),
-                    "Invalid JSON for claude={claude}, codex={codex}, ssh={ssh}, cli={has_cli}: {json_str}"
+                    "Invalid JSON for claude={claude}, codex={codex}, gh={gh}, ssh={ssh}, cli={has_cli}: {json_str}"
                 );
             }
         }
