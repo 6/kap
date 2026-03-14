@@ -26,3 +26,5 @@ pub mod reload;
 pub mod remote;
 #[doc(hidden)]
 pub mod status;
+#[doc(hidden)]
+pub mod upgrade;

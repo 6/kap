@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use kap::{
     check, cli, container, dev, init, init_env, mcp, mcp_cmd, proxy, reload, remote, status,
+    upgrade,
 };
 
 #[derive(Parser)]
@@ -63,6 +64,9 @@ enum Command {
         #[arg(short, long)]
         stats: bool,
     },
+    /// Pull latest sidecar image and update all running containers
+    #[command(display_order = 6)]
+    Upgrade,
 
     // -- Diagnostics --
     /// Check if kap is working (runs checks via docker exec)
@@ -352,6 +356,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Status => status::run(),
         Command::Up { reset } => container::up(None, reset),
+        Command::Upgrade => upgrade::run(),
         Command::WhyDenied { tail, log } => {
             if std::path::Path::new(&log).exists() {
                 // Running inside the container
