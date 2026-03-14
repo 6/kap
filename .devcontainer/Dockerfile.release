@@ -1,0 +1,17 @@
+# Release Dockerfile: uses pre-built binaries from CI instead of compiling Rust.
+# The build job produces binaries for each architecture; the docker job extracts
+# them into binaries/linux/{amd64,arm64}/kap before building this image.
+FROM debian:bookworm-slim
+ARG TARGETPLATFORM
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+COPY binaries/${TARGETPLATFORM}/kap /usr/local/bin/kap
+RUN mkdir -p /var/log/kap
+CMD ["kap", "sidecar-proxy"]
