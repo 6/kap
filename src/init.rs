@@ -806,7 +806,11 @@ const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
     },
     DomainGroup {
         label: "Dev tools",
-        domains: &["mise.jdx.dev"],
+        domains: &["mise.jdx.dev", "mise-versions.jdx.dev"],
+    },
+    DomainGroup {
+        label: "Sigstore (software signature verification)",
+        domains: &["tuf-repo-cdn.sigstore.dev"],
     },
     DomainGroup {
         label: "Ruby",

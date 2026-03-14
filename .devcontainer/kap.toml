@@ -32,6 +32,10 @@ allow = [
 
   # Dev tools
   "mise.jdx.dev",
+  "mise-versions.jdx.dev",
+
+  # Sigstore (software signature verification)
+  "tuf-repo-cdn.sigstore.dev",
 
   # Ruby
   "rubygems.org",
