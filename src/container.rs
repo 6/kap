@@ -540,8 +540,7 @@ mod tests {
 
     #[test]
     fn resolve_workspace_folder_with_explicit_path() {
-        let dir =
-            std::env::temp_dir().join(format!("kap-resolve-ws-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-resolve-ws-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
         std::fs::write(dir.join(".devcontainer/devcontainer.json"), "{}").unwrap();
 
@@ -554,24 +553,25 @@ mod tests {
 
     #[test]
     fn resolve_workspace_folder_explicit_path_missing_devcontainer() {
-        let dir = std::env::temp_dir()
-            .join(format!("kap-resolve-ws-missing-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("kap-resolve-ws-missing-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let result = resolve_workspace_folder(Some(&dir));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("devcontainer.json"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("devcontainer.json")
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn require_kap_init_at_with_explicit_path() {
-        let dir =
-            std::env::temp_dir().join(format!("kap-init-at-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-init-at-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
         std::fs::write(dir.join(".devcontainer/kap.toml"), "").unwrap();
 
@@ -583,8 +583,7 @@ mod tests {
 
     #[test]
     fn require_kap_init_at_explicit_path_missing() {
-        let dir = std::env::temp_dir()
-            .join(format!("kap-init-at-missing-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kap-init-at-missing-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let result = require_kap_init_at(Some(&dir));
@@ -596,8 +595,11 @@ mod tests {
 
     #[test]
     fn exec_options_builder() {
-        let opts = ExecOptions::new("/tmp/project", vec!["bash".into(), "-lc".into(), "echo hi".into()])
-            .stdin(Stdio::null());
+        let opts = ExecOptions::new(
+            "/tmp/project",
+            vec!["bash".into(), "-lc".into(), "echo hi".into()],
+        )
+        .stdin(Stdio::null());
 
         assert_eq!(opts.workspace, Some(PathBuf::from("/tmp/project")));
         assert_eq!(opts.cmd, vec!["bash", "-lc", "echo hi"]);
