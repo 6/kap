@@ -102,11 +102,13 @@ pub fn push() -> Result<()> {
     let _ = std::fs::remove_file(&tmp_binary);
 
     eprintln!();
-    eprintln!("[dev] pushed to {} sidecar(s). Next steps:", sidecars.len());
-    eprintln!("  cd <project> && kap up     bring app containers back");
+    eprintln!("  ✓ Pushed to {} sidecar(s)", sidecars.len());
     eprintln!();
-    eprintln!("  WARNING: do NOT use --reset, it will pull the published image");
-    eprintln!("  and overwrite the dev binary you just pushed.");
+    eprintln!("  Remote daemon (if running):");
+    eprintln!("  $ kap remote stop && kap remote start");
+    eprintln!();
+    eprintln!("  ⚠ Do NOT use kap up --reset (it will pull the");
+    eprintln!("    published image and overwrite the dev binary)");
     Ok(())
 }
 
