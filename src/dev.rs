@@ -18,7 +18,13 @@ pub fn push() -> Result<()> {
         );
     }
 
-    // 2. Build host binary
+    // 2. Find all running kap sidecar containers (fail fast before slow builds)
+    let sidecars = find_all_sidecars()?;
+    if sidecars.is_empty() {
+        anyhow::bail!("no running sidecar containers found — start one with `kap up` first");
+    }
+
+    // 3. Build host binary
     eprintln!("[dev] building host binary...");
     let status = Command::new("cargo")
         .args(["install", "--path", "."])
@@ -28,7 +34,7 @@ pub fn push() -> Result<()> {
         anyhow::bail!("cargo install failed");
     }
 
-    // 3. Build Linux binary via Docker
+    // 4. Build Linux binary via Docker
     eprintln!("[dev] building Linux binary...");
     let status = Command::new("docker")
         .args([
@@ -40,7 +46,7 @@ pub fn push() -> Result<()> {
         anyhow::bail!("docker build failed");
     }
 
-    // 4. Extract the Linux binary from the image
+    // 5. Extract the Linux binary from the image
     let tmp_binary = std::env::temp_dir().join("kap-dev-linux");
     let create_output = Command::new("docker")
         .args(["create", "kap-dev"])
@@ -66,14 +72,7 @@ pub fn push() -> Result<()> {
 
     cp_status.context("failed to extract binary from image")?;
 
-    // 5. Find all running kap sidecar containers
-    let sidecars = find_all_sidecars()?;
-    if sidecars.is_empty() {
-        eprintln!("[dev] no running sidecar containers found");
-        return Ok(());
-    }
-
-    // 6. Copy binary + restart each sidecar
+    // 7. Copy binary + restart each sidecar
     for sidecar in &sidecars {
         eprintln!("[dev] deploying to {sidecar}...");
         let status = Command::new("docker")
