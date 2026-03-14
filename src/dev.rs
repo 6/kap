@@ -101,15 +101,59 @@ pub fn push() -> Result<()> {
     // Clean up temp binary
     let _ = std::fs::remove_file(&tmp_binary);
 
+    // Restart remote daemon if running (uses the newly installed host binary)
+    let restarted_remote = restart_remote_daemon();
+
     eprintln!();
     eprintln!("  ✓ Pushed to {} sidecar(s)", sidecars.len());
-    eprintln!();
-    eprintln!("  Remote daemon (if running):");
-    eprintln!("  $ kap remote stop && kap remote start");
+    if restarted_remote {
+        eprintln!("  ✓ Restarted remote daemon");
+    }
     eprintln!();
     eprintln!("  ⚠ Do NOT use kap up --reset (it will pull the");
     eprintln!("    published image and overwrite the dev binary)");
     Ok(())
+}
+
+/// Restart the remote daemon if it's running. Returns true if restarted.
+fn restart_remote_daemon() -> bool {
+    let data_dir = crate::remote::auth::data_dir();
+    let pid_file = data_dir.join("pid");
+
+    let pid: u32 = match std::fs::read_to_string(&pid_file) {
+        Ok(s) => match s.trim().parse() {
+            Ok(p) => p,
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    };
+
+    // Check if process is actually running
+    if unsafe { libc::kill(pid as i32, 0) } != 0 {
+        return false;
+    }
+
+    // Stop the old daemon
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+    // Brief wait for it to exit
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Start the new one (detached)
+    match Command::new("kap")
+        .args(["remote", "start"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&pid_file); // new process writes its own
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Find all running kap sidecar container names.
