@@ -24,6 +24,16 @@ Single Rust binary with five components:
 4. **CLI proxy** (:3130): proxies CLI tools (`gh`, `aws`, etc.) from the app container. Two modes per tool: `mode = "proxy"` (default) runs the command on the sidecar, returning stdout/stderr; `mode = "direct"` returns credentials to the shim, which exec's the real binary locally (needed for commands that write files, e.g. `gh run download`). Shims live on the shared `kap-bin` volume at `/opt/kap/bin/`, managed by the sidecar at runtime. Per-tool allow/deny in `[[cli.tools]]` config (proxy mode only).
 5. **Remote access daemon** (:19420): runs on the host (not in Docker). HTTP server with token-based auth for monitoring and steering devcontainers from a phone. QR code pairing, WebSocket streaming, web UI served from the binary. Start with `kap remote start`.
 
+## Library crate
+
+kap is both a CLI binary (`src/main.rs`) and a Rust library (`src/lib.rs`), so other Rust projects can depend on it without shelling out.
+
+**Public API:** Only `config` and `container` are public. All other modules are `#[doc(hidden)]` — they must remain `pub` (the binary crate needs them), but are not part of the stable API for downstream consumers.
+
+**Rules for library code (everything in `src/` except `main.rs`):**
+- **Never call `std::process::exit()`** — return `Result`/`anyhow::bail!` instead. Library code must not kill the host process. A test in `lib.rs` enforces this.
+- **Don't make new modules `pub`** without `#[doc(hidden)]` unless they're intentionally part of the external API. Default to `#[doc(hidden)] pub mod`.
+
 ## Key modules
 
 - `src/main.rs`:clap CLI dispatch

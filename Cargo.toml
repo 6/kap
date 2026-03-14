@@ -9,6 +9,10 @@ license = "MIT"
 name = "kap"
 path = "src/main.rs"
 
+[lib]
+name = "kap"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

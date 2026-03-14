@@ -97,7 +97,10 @@ pub async fn run(tool: &str, args: &[String]) -> Result<()> {
         let _ = std::io::stdout().write_all(&stdout);
     }
 
-    std::process::exit(exit_code);
+    if exit_code != 0 {
+        anyhow::bail!("{tool} exited with code {exit_code}");
+    }
+    Ok(())
 }
 
 /// Direct mode: decode env vars from sidecar response, find the real binary,

@@ -275,7 +275,7 @@ pub fn run() -> Result<()> {
         println!("  \x1b[32mall {pass} checks passed\x1b[0m");
     } else {
         println!("  \x1b[31m{fail} failed\x1b[0m, {pass} passed");
-        std::process::exit(1);
+        anyhow::bail!("{fail} status check(s) failed");
     }
     println!();
     Ok(())

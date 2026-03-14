@@ -38,7 +38,10 @@ pub fn up(reset: bool) -> Result<()> {
         .context("running devcontainer up")?;
 
     if !status.success() {
-        anyhow::bail!("devcontainer up failed (exit code {})", status.code().unwrap_or(1));
+        anyhow::bail!(
+            "devcontainer up failed (exit code {})",
+            status.code().unwrap_or(1)
+        );
     }
 
     // Clear proxy logs on reset (the volume persists across container recreates)
@@ -79,7 +82,10 @@ pub fn down(project: Option<String>, volumes: bool) -> Result<()> {
         .context("running docker compose down")?;
 
     if !status.success() {
-        anyhow::bail!("docker compose down failed (exit code {})", status.code().unwrap_or(1));
+        anyhow::bail!(
+            "docker compose down failed (exit code {})",
+            status.code().unwrap_or(1)
+        );
     }
 
     Ok(())
@@ -115,7 +121,10 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
         .context("running devcontainer exec")?;
 
     if !status.success() {
-        anyhow::bail!("devcontainer exec failed (exit code {})", status.code().unwrap_or(1));
+        anyhow::bail!(
+            "devcontainer exec failed (exit code {})",
+            status.code().unwrap_or(1)
+        );
     }
 
     Ok(())
@@ -374,6 +383,22 @@ mod tests {
     fn derive_compose_project_root_returns_none() {
         let p = derive_compose_project(Path::new("/"));
         assert!(p.is_none());
+    }
+
+    #[test]
+    fn require_kap_init_returns_err_not_exit() {
+        let dir = std::env::temp_dir().join(format!("kap-init-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let result = require_kap_init();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("kap init"));
+
+        std::env::set_current_dir(original).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
