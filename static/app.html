@@ -261,8 +261,14 @@ async function init() {
     return;
   }
   await loadContainers();
-  loadStatus();
   loadSettings();
+  // Restore tab from hash (e.g. #/logs, #/agent)
+  const tabHash = location.hash.startsWith('#/') ? location.hash.slice(2) : '';
+  if (tabHash && ['status', 'logs', 'agent'].includes(tabHash)) {
+    switchTab(tabHash);
+  } else {
+    loadStatus();
+  }
 }
 
 function projectQuery() {
@@ -342,6 +348,12 @@ function switchProject() {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'v-' + name));
+  // Persist tab in hash (use /tab format to distinguish from pairing tokens)
+  if (name !== 'status') {
+    history.replaceState(null, '', '#/' + name);
+  } else {
+    history.replaceState(null, '', location.pathname);
+  }
   if (name === 'status') loadStatus();
   if (name === 'logs') connectLogs();
   if (name === 'agent') { showSessionsList(); loadSessions(); }
@@ -444,8 +456,8 @@ async function loadSessions() {
     if (!sessions.length) { el.innerHTML = '<div class="empty">No sessions found</div>'; return; }
     el.innerHTML = sessions.map(s => `
       <div class="session-item" onclick="openSession('${esc(s.id)}')">
-        <div class="sid">${esc(s.project)}</div>
-        <div class="meta">${s.event_count} events · ${timeAgo(s.last_event)} · ${esc(s.id.slice(0,8))}…</div>
+        <div class="sid">${esc(s.project)}${s.task ? ' — ' + esc(s.task) : ''}</div>
+        <div class="meta">${s.event_count} events · ${timeAgo(s.last_event)}</div>
       </div>
     `).join('');
   } catch(e) {

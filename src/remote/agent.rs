@@ -8,6 +8,8 @@ use crate::remote::containers;
 pub struct SessionInfo {
     pub id: String,
     pub project: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     pub branch: Option<String>,
     pub last_event: Option<String>,
     pub event_count: usize,
@@ -109,11 +111,20 @@ done"#,
         let project = decode_project_name(&project_hash);
 
         let mut branch = None;
+        let mut task = None;
         for line in head.lines() {
-            if let Ok(evt) = serde_json::from_str::<RawEvent>(line)
-                && branch.is_none()
-            {
-                branch = evt.git_branch;
+            if let Ok(evt) = serde_json::from_str::<RawEvent>(line) {
+                if branch.is_none() {
+                    branch = evt.git_branch;
+                }
+                // Extract first user message as the session task/title
+                if task.is_none()
+                    && evt.event_type.as_deref() == Some("user")
+                    && let Some(msg) = &evt.message
+                    && msg.role.as_deref() == Some("user")
+                {
+                    task = extract_user_text(msg).map(|s| truncate_str(&s, 80));
+                }
             }
         }
 
@@ -131,10 +142,32 @@ done"#,
         sessions.push(SessionInfo {
             id: session_id.to_string(),
             project,
+            task,
             branch,
             last_event: last_ts,
             event_count,
         });
+    }
+
+    // If all projects are "workspace" (common in devcontainers), try to
+    // resolve the actual repo name from git.
+    let all_workspace = !sessions.is_empty() && sessions.iter().all(|s| s.project == "workspace");
+    if all_workspace
+        && let Some(repo_name) = containers::exec_in(
+            app_container,
+            &[
+                "sh",
+                "-c",
+                "basename $(git -C /workspace rev-parse --show-toplevel 2>/dev/null) 2>/dev/null || basename $(pwd)",
+            ],
+        )
+    {
+        let name = repo_name.trim().to_string();
+        if !name.is_empty() && name != "workspace" {
+            for s in &mut sessions {
+                s.project = name.clone();
+            }
+        }
     }
 
     // Sort by last_event descending (newest first)
@@ -369,6 +402,34 @@ fn extract_tool_name(event_type: &str, msg: Option<&RawMessage>) -> Option<Strin
     None
 }
 
+/// Extract the text content from a user message.
+fn extract_user_text(msg: &RawMessage) -> Option<String> {
+    match &msg.content {
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() || trimmed.starts_with('<') {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            for item in arr {
+                if item.get("type").and_then(|t| t.as_str()) == Some("text")
+                    && let Some(text) = item.get("text").and_then(|t| t.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with('<') {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Extract the raw project hash from a session file path.
 fn extract_project_name(path: &str) -> String {
     // Path: .../projects/{project-hash}/{session_id}.jsonl
@@ -421,10 +482,25 @@ fn find_session_path(app_container: &str, session_id: &str) -> Result<String> {
     Ok(path)
 }
 
-/// Check if a Claude Code process is running in the container.
+/// Check if a Claude Code agent process is actively running in the container.
+/// Looks for a `claude` process consuming CPU (state R/S with recent CPU),
+/// filtering out background daemons that idle between turns.
 pub fn is_agent_running(app_container: &str) -> Option<u32> {
-    let output = containers::exec_in(app_container, &["pgrep", "-f", "claude"])?;
-    output.lines().next()?.trim().parse().ok()
+    // Use ps to find claude processes with >0% CPU — an idle daemon shows 0.0%
+    // while an active agent turn shows measurable CPU usage.
+    // Fall back to checking if any claude process has been running for <2 minutes
+    // (covers the case where ps samples at a moment of low CPU).
+    let output = containers::exec_in(
+        app_container,
+        &[
+            "sh",
+            "-c",
+            // First try: claude process using CPU right now
+            // Second try: claude process started recently (etimes < 120s)
+            r#"ps -eo pid,pcpu,etimes,args 2>/dev/null | awk '/[c]laude/ && !/claude-mcp/ { if ($2 > 0.0 || $3 < 120) { print $1; exit } }'"#,
+        ],
+    )?;
+    output.trim().parse().ok()
 }
 
 /// Get the git diff from the app container's workspace.
@@ -695,5 +771,35 @@ mod tests {
     #[test]
     fn extract_project_name_no_projects_dir() {
         assert_eq!(extract_project_name("/some/random/path.jsonl"), "unknown");
+    }
+
+    #[test]
+    fn extract_user_text_string_content() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: Some(serde_json::Value::String("fix the tests".into())),
+        };
+        assert_eq!(extract_user_text(&msg), Some("fix the tests".into()));
+    }
+
+    #[test]
+    fn extract_user_text_skips_meta() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: Some(serde_json::Value::String("<local-command...>".into())),
+        };
+        assert_eq!(extract_user_text(&msg), None);
+    }
+
+    #[test]
+    fn extract_user_text_array_content() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: Some(serde_json::json!([{"type": "text", "text": "add streaming"}])),
+        };
+        assert_eq!(extract_user_text(&msg), Some("add streaming".into()));
     }
 }
