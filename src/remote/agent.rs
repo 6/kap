@@ -590,11 +590,7 @@ fn find_all_claude_pids(app_container: &str) -> Option<Vec<u32>> {
         .lines()
         .filter_map(|line| line.trim().parse().ok())
         .collect();
-    if pids.is_empty() {
-        None
-    } else {
-        Some(pids)
-    }
+    if pids.is_empty() { None } else { Some(pids) }
 }
 
 /// Extract worktree name from a cwd path.
@@ -967,10 +963,7 @@ mod tests {
     fn parse_cwd_from_jsonl_skips_events_without_cwd() {
         let jsonl = "{\"type\":\"system\",\"timestamp\":\"t\"}\n\
                      {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"cwd\":\"/workspace\",\"timestamp\":\"t\",\"uuid\":\"1\"}";
-        assert_eq!(
-            parse_cwd_from_jsonl(jsonl),
-            Some("/workspace".to_string())
-        );
+        assert_eq!(parse_cwd_from_jsonl(jsonl), Some("/workspace".to_string()));
     }
 
     #[test]

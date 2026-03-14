@@ -369,8 +369,7 @@ async fn handle_agent_cancel(
     let pid = agent::find_pid_for_session(&app, session_id);
     match pid {
         Some(p) => {
-            let exit =
-                containers::exec_exit_code(&app, &["kill", "-INT", &p.to_string()]);
+            let exit = containers::exec_exit_code(&app, &["kill", "-INT", &p.to_string()]);
             if exit == 0 {
                 Ok(json_response(
                     StatusCode::OK,
@@ -464,9 +463,7 @@ async fn handle_agent_message(
         .unwrap_or_else(|| "/workspace".to_string());
 
     let kill_cmd = match existing_pid {
-        Some(pid) => format!(
-            "trap '' INT; kill -INT {pid} 2>/dev/null; trap - INT; sleep 1; "
-        ),
+        Some(pid) => format!("trap '' INT; kill -INT {pid} 2>/dev/null; trap - INT; sleep 1; "),
         None => String::new(),
     };
     let cmd = format!(
