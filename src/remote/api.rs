@@ -456,13 +456,14 @@ async fn handle_agent_message(
         ));
     }
 
-    // Stop any running agent first, then resume with the new message.
-    // SIGINT gives Claude Code a chance to exit cleanly; brief sleep to let it finish.
-    // Use bash -l (login shell) so PATH includes ~/.local/bin where claude lives.
+    // Stop any running agent, then resume with the new message.
+    // cd to /workspace (devcontainer default) so claude finds the project.
+    // Log to /tmp/kap-steer.log for debugging if it fails silently.
     let session_id_owned = session_id.to_string();
     let cmd = format!(
         "pkill -INT -f claude 2>/dev/null; sleep 1; \
-         nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
+         cd /workspace 2>/dev/null || cd ~; \
+         nohup claude --resume {} --dangerously-skip-permissions -p {} > /tmp/kap-steer.log 2>&1 &",
         shell_escape(&session_id_owned),
         shell_escape(&msg_req.message),
     );
