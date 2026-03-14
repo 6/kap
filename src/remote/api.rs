@@ -290,7 +290,7 @@ async fn handle_agent_session(
 
 async fn handle_agent_status(
     req: &Request<hyper::body::Incoming>,
-    _session_id: &str,
+    session_id: &str,
 ) -> Result<Response<Body>> {
     let (app, _sidecar) = match resolve_containers(req) {
         Ok(pair) => pair,
@@ -304,7 +304,7 @@ async fn handle_agent_status(
         }
     };
 
-    let running = agent::is_agent_running(&app).is_some();
+    let running = agent::is_session_active(&app, session_id);
     Ok(json_response(
         StatusCode::OK,
         &AgentStatusResponse { running },
@@ -433,16 +433,6 @@ async fn handle_agent_message(
         }
     };
 
-    // Check agent is not currently running (can only send between turns)
-    if agent::is_agent_running(&app).is_some() {
-        return Ok(json_response(
-            StatusCode::CONFLICT,
-            &ErrorBody {
-                error: "agent is currently running; wait for it to finish before sending a message",
-            },
-        ));
-    }
-
     // Parse the request body
     let body_bytes = req.into_body().collect().await?.to_bytes();
     let msg_req: MessageRequest = match serde_json::from_slice(&body_bytes) {
@@ -466,7 +456,8 @@ async fn handle_agent_message(
         ));
     }
 
-    // Launch claude --resume in detached mode so the HTTP request returns immediately
+    // Stop any running agent first, then resume with the new message.
+    // SIGINT gives Claude Code a chance to exit cleanly; brief sleep to let it finish.
     let session_id_owned = session_id.to_string();
     let exit = containers::exec_exit_code(
         &app,
@@ -474,7 +465,8 @@ async fn handle_agent_message(
             "sh",
             "-c",
             &format!(
-                "nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
+                "pkill -INT -f claude 2>/dev/null; sleep 1; \
+                 nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
                 shell_escape(&session_id_owned),
                 shell_escape(&msg_req.message),
             ),

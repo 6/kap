@@ -482,25 +482,33 @@ fn find_session_path(app_container: &str, session_id: &str) -> Result<String> {
     Ok(path)
 }
 
-/// Check if a Claude Code agent process is actively running in the container.
-/// Looks for a `claude` process consuming CPU (state R/S with recent CPU),
-/// filtering out background daemons that idle between turns.
-pub fn is_agent_running(app_container: &str) -> Option<u32> {
-    // Use ps to find claude processes with >0% CPU — an idle daemon shows 0.0%
-    // while an active agent turn shows measurable CPU usage.
-    // Fall back to checking if any claude process has been running for <2 minutes
-    // (covers the case where ps samples at a moment of low CPU).
+/// Check if a session is actively being written to (file modified in last 15s).
+/// More reliable than process detection — avoids false positives from background
+/// Claude daemons that persist between turns.
+pub fn is_session_active(app_container: &str, session_id: &str) -> bool {
+    // find the session file modified within the last 15 seconds
     let output = containers::exec_in(
         app_container,
         &[
             "sh",
             "-c",
-            // First try: claude process using CPU right now
-            // Second try: claude process started recently (etimes < 120s)
-            r#"ps -eo pid,pcpu,etimes,args 2>/dev/null | awk '/[c]laude/ && !/claude-mcp/ { if ($2 > 0.0 || $3 < 120) { print $1; exit } }'"#,
+            &format!(
+                "for d in /home/*/.claude/projects /root/.claude/projects; do \
+                   [ -d \"$d\" ] && find \"$d\" -maxdepth 2 -name '{session_id}.jsonl' -mmin -0.25 2>/dev/null; \
+                 done | head -1"
+            ),
         ],
-    )?;
-    output.trim().parse().ok()
+    );
+    output
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Check if any Claude Code process is running in the container (for cancel).
+pub fn is_agent_running(app_container: &str) -> Option<u32> {
+    let output = containers::exec_in(app_container, &["pgrep", "-f", "claude"])?;
+    output.lines().next()?.trim().parse().ok()
 }
 
 /// Get the git diff from the app container's workspace.
