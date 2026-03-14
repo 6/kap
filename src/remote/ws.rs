@@ -132,7 +132,9 @@ async fn stream_agent(mut ws: WsStream, session_id: String, project: Option<Stri
             "sh",
             "-c",
             &format!(
-                "find /home /root -name '{session_id}.jsonl' -path '*/.claude/projects/*' 2>/dev/null | head -1"
+                "for d in /home/*/.claude/projects /root/.claude/projects; do \
+                   [ -d \"$d\" ] && find \"$d\" -maxdepth 2 -name '{session_id}.jsonl' 2>/dev/null; \
+                 done | head -1"
             ),
         ],
     )
@@ -149,7 +151,7 @@ async fn stream_agent(mut ws: WsStream, session_id: String, project: Option<Stri
             "tail",
             "-f",
             "-n",
-            "50", // send last 50 lines as catch-up
+            "0", // no catch-up — REST handles initial load
             &session_path,
         ],
     )

@@ -237,6 +237,7 @@ let logFilter = 'all';
 let currentSession = null;
 let agentRunning = false;
 let statusPollTimer = null;
+let seenUuids = new Set();
 let selectedProject = localStorage.getItem('kap_project') || null;
 
 // --- Auth ---
@@ -476,6 +477,7 @@ async function openSession(id) {
   try {
     const events = await apiFetch(`/api/agent/session/${id}`);
     events.reverse();
+    seenUuids = new Set(events.filter(e => e.uuid).map(e => e.uuid));
     let html = `<div style="flex-shrink:0">`;
     html += `<span class="back-btn" onclick="showSessionsList()">← back</span>`;
     html += `<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">`;
@@ -520,6 +522,8 @@ function connectAgentWs(id) {
   agentWs.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
+      if (ev.uuid && seenUuids.has(ev.uuid)) return;
+      if (ev.uuid) seenUuids.add(ev.uuid);
       const container = document.getElementById('session-events');
       if (container) container.insertAdjacentHTML('afterbegin', renderEvent(ev));
     } catch(_) {}
