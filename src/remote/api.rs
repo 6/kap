@@ -458,36 +458,45 @@ async fn handle_agent_message(
 
     // Stop any running agent first, then resume with the new message.
     // SIGINT gives Claude Code a chance to exit cleanly; brief sleep to let it finish.
+    // Use bash -l (login shell) so PATH includes ~/.local/bin where claude lives.
     let session_id_owned = session_id.to_string();
-    let exit = containers::exec_exit_code(
-        &app,
-        &[
-            "sh",
-            "-c",
-            &format!(
-                "pkill -INT -f claude 2>/dev/null; sleep 1; \
-                 nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
-                shell_escape(&session_id_owned),
-                shell_escape(&msg_req.message),
-            ),
-        ],
+    let cmd = format!(
+        "pkill -INT -f claude 2>/dev/null; sleep 1; \
+         nohup claude --resume {} --dangerously-skip-permissions -p {} > /dev/null 2>&1 &",
+        shell_escape(&session_id_owned),
+        shell_escape(&msg_req.message),
     );
+    let output = std::process::Command::new("docker")
+        .args(["exec", &app, "bash", "-lc", &cmd])
+        .output();
 
-    if exit == 0 {
-        Ok(json_response(
+    match output {
+        Ok(o) if o.status.success() => Ok(json_response(
             StatusCode::OK,
             &MessageResponse {
                 sent: true,
                 session_id: session_id_owned,
             },
-        ))
-    } else {
-        Ok(json_response(
+        )),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Ok(json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &ErrorBodyOwned {
+                    error: format!(
+                        "failed to launch claude --resume (exit {}): {}",
+                        o.status.code().unwrap_or(-1),
+                        stderr.trim()
+                    ),
+                },
+            ))
+        }
+        Err(e) => Ok(json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &ErrorBody {
-                error: "failed to launch claude --resume",
+            &ErrorBodyOwned {
+                error: format!("docker exec failed: {e}"),
             },
-        ))
+        )),
     }
 }
 

@@ -810,4 +810,89 @@ mod tests {
         };
         assert_eq!(extract_user_text(&msg), Some("add streaming".into()));
     }
+
+    #[test]
+    fn extract_user_text_empty_string() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: Some(serde_json::Value::String("".into())),
+        };
+        assert_eq!(extract_user_text(&msg), None);
+    }
+
+    #[test]
+    fn extract_user_text_none_content() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: None,
+        };
+        assert_eq!(extract_user_text(&msg), None);
+    }
+
+    #[test]
+    fn extract_user_text_array_skips_tool_result() {
+        let msg = RawMessage {
+            role: Some("user".into()),
+            model: None,
+            content: Some(serde_json::json!([
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+                {"type": "text", "text": "now fix the tests"}
+            ])),
+        };
+        assert_eq!(extract_user_text(&msg), Some("now fix the tests".into()));
+    }
+
+    #[test]
+    fn decode_project_name_workspace() {
+        // Inside devcontainers, workspace path is /workspace
+        assert_eq!(decode_project_name("-workspace"), "workspace");
+    }
+
+    #[test]
+    fn session_info_includes_task() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"fix the auth bug"},"timestamp":"2026-03-07T10:00:00Z","uuid":"1","gitBranch":"main"}"#;
+        let events = parse_session_events(jsonl);
+        assert_eq!(events.len(), 1);
+        // Task extraction happens in discover_sessions (from head lines),
+        // but verify the underlying user text extraction works end-to-end
+        let raw: RawEvent = serde_json::from_str(jsonl).unwrap();
+        let task = extract_user_text(raw.message.as_ref().unwrap());
+        assert_eq!(task, Some("fix the auth bug".into()));
+    }
+
+    #[test]
+    fn sessions_sorted_by_last_event() {
+        let mut sessions = vec![
+            SessionInfo {
+                id: "old".into(),
+                project: "test".into(),
+                task: None,
+                branch: None,
+                last_event: Some("2026-03-07T08:00:00Z".into()),
+                event_count: 5,
+            },
+            SessionInfo {
+                id: "new".into(),
+                project: "test".into(),
+                task: None,
+                branch: None,
+                last_event: Some("2026-03-07T12:00:00Z".into()),
+                event_count: 10,
+            },
+            SessionInfo {
+                id: "none".into(),
+                project: "test".into(),
+                task: None,
+                branch: None,
+                last_event: None,
+                event_count: 1,
+            },
+        ];
+        sessions.sort_by(|a, b| b.last_event.cmp(&a.last_event));
+        assert_eq!(sessions[0].id, "new");
+        assert_eq!(sessions[1].id, "old");
+        assert_eq!(sessions[2].id, "none");
+    }
 }
