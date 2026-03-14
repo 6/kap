@@ -444,6 +444,24 @@ fn maybe_setup_1password_agent() {
     }
 }
 
+/// Check whether a devcontainer.json value already contains `kap sidecar-init`.
+/// Handles string, array (exec form), and object (parallel commands) formats.
+fn has_kap_sidecar_init(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => s.contains("kap sidecar-init"),
+        serde_json::Value::Array(arr) => {
+            let joined = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            joined.contains("kap sidecar-init")
+        }
+        serde_json::Value::Object(obj) => obj.values().any(has_kap_sidecar_init),
+        _ => false,
+    }
+}
+
 fn generate_post_start_command(options: &SetupOptions) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     if options.install_claude_code {
@@ -639,11 +657,13 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
 
     let mut notes: Vec<String> = Vec::new();
 
-    if dc_obj.get("initializeCommand").is_some() {
-        notes.push(
-            "initializeCommand already set. Add `kap sidecar-init` to your existing command."
-                .to_string(),
-        );
+    if let Some(existing) = dc_obj.get("initializeCommand") {
+        if !has_kap_sidecar_init(existing) {
+            notes.push(
+                "initializeCommand already set. Add `kap sidecar-init` to your existing command."
+                    .to_string(),
+            );
+        }
     } else {
         dc_obj["initializeCommand"] = serde_json::Value::String("kap sidecar-init".to_string());
     }
@@ -651,12 +671,44 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     // Optional setup: AI tools and SSH signing
     let setup = prompt_setup_options(yes);
     if setup.any_enabled() {
-        if dc_obj.get("postStartCommand").is_some() {
-            notes.push(
-                "postStartCommand already set. Merge the setup commands manually.".to_string(),
-            );
+        let kap_commands = generate_post_start_command(&setup);
+        let existing_is_object = dc_obj
+            .get("postStartCommand")
+            .is_some_and(|v| v.is_object());
+
+        if dc_obj.get("postStartCommand").is_none() {
+            dc_obj["postStartCommand"] = kap_commands;
+        } else if existing_is_object {
+            // Auto-merge named keys into existing object
+            let kap_obj = kap_commands.as_object().unwrap();
+            let merged = dc_obj["postStartCommand"].as_object_mut().unwrap();
+            for (key, value) in kap_obj {
+                if !merged.contains_key(key) {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
         } else {
-            dc_obj["postStartCommand"] = generate_post_start_command(&setup);
+            // String or array — can't auto-merge. Build the replacement object
+            // with the user's existing command plus kap's commands.
+            let existing = dc_obj.get("postStartCommand").unwrap();
+            let existing_str = match existing {
+                serde_json::Value::String(s) => s.clone(),
+                other => serde_json::to_string(other).unwrap(),
+            };
+            let mut replacement = serde_json::Map::new();
+            replacement.insert(
+                "existing".to_string(),
+                serde_json::Value::String(existing_str),
+            );
+            for (key, value) in kap_commands.as_object().unwrap() {
+                replacement.insert(key.clone(), value.clone());
+            }
+            let json =
+                serde_json::to_string_pretty(&serde_json::Value::Object(replacement)).unwrap();
+            notes.push(format!(
+                "postStartCommand already set. Replace it with:\n  \"postStartCommand\": {}",
+                json.replace('\n', "\n  ")
+            ));
         }
     }
     if setup.ssh_signing {
@@ -772,6 +824,8 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
 
 struct DomainGroup {
     label: &'static str,
+    /// Each entry is `"domain"` or `"domain # inline comment"`.
+    /// The `#` separator is split at config-generation time to produce a TOML inline comment.
     domains: &'static [&'static str],
 }
 
@@ -782,7 +836,7 @@ const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
             "github.com",
             "*.github.com",
             "*.githubusercontent.com",
-            "*.blob.core.windows.net", // GitHub Actions artifact downloads
+            "*.blob.core.windows.net # GitHub Actions artifact downloads",
         ],
     },
     DomainGroup {
@@ -865,7 +919,12 @@ const DEFAULT_DOMAIN_GROUPS: &[DomainGroup] = &[
 fn all_default_domains() -> Vec<&'static str> {
     DEFAULT_DOMAIN_GROUPS
         .iter()
-        .flat_map(|g| g.domains.iter().copied())
+        .flat_map(|g| {
+            g.domains.iter().map(|d| match d.split_once(" # ") {
+                Some((domain, _)) => domain,
+                None => d,
+            })
+        })
         .collect()
 }
 
@@ -933,7 +992,11 @@ fn generate_config() -> String {
             } else {
                 ","
             };
-            allow_lines.push(format!("  \"{domain}\"{comma}"));
+            if let Some((d, comment)) = domain.split_once(" # ") {
+                allow_lines.push(format!("  \"{d}\"{comma}  # {comment}"));
+            } else {
+                allow_lines.push(format!("  \"{domain}\"{comma}"));
+            }
         }
     }
     let allow_toml = allow_lines.join("\n");
@@ -946,6 +1009,7 @@ fn generate_config() -> String {
 # [cli]
 # [[cli.tools]]
 # name = "gh"
+# mode = "proxy"
 # env = ["GH_TOKEN"]
 # allow = ["*"]
 # deny = ["auth token", "auth login", "auth logout", "auth refresh"]
@@ -979,7 +1043,7 @@ fn generate_config() -> String {
                     format!("\ndeny = [{deny}]")
                 };
                 format!(
-                    "\n[[cli.tools]]\nname = \"{}\"\nenv = [{}]\nallow = [{}]{deny_line}",
+                    "\n[[cli.tools]]\nname = \"{}\"\nmode = \"proxy\"\nenv = [{}]\nallow = [{}]{deny_line}",
                     t.name, env, allow
                 )
             })
@@ -1116,6 +1180,11 @@ mod tests {
         assert!(config.contains("# Java"));
         assert!(config.contains("# CocoaPods"));
         assert!(config.contains("# --- MCP servers"));
+        // Inline domain comments should appear in generated config
+        assert!(
+            config.contains("\"*.blob.core.windows.net\",  # GitHub Actions artifact downloads"),
+            "inline comment missing for windows.net domain"
+        );
     }
 
     #[test]
@@ -1973,6 +2042,81 @@ mod tests {
                 .unwrap();
         // Should preserve existing postStartCommand
         assert_eq!(updated["postStartCommand"], "echo existing");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn has_kap_sidecar_init_string() {
+        assert!(has_kap_sidecar_init(&serde_json::json!("kap sidecar-init")));
+        assert!(has_kap_sidecar_init(&serde_json::json!(
+            "kap sidecar-init && echo done"
+        )));
+        assert!(!has_kap_sidecar_init(&serde_json::json!("echo hello")));
+    }
+
+    #[test]
+    fn has_kap_sidecar_init_array() {
+        assert!(has_kap_sidecar_init(&serde_json::json!([
+            "kap",
+            "sidecar-init"
+        ])));
+        assert!(!has_kap_sidecar_init(&serde_json::json!(["echo", "hello"])));
+    }
+
+    #[test]
+    fn has_kap_sidecar_init_object() {
+        assert!(has_kap_sidecar_init(
+            &serde_json::json!({"kap": "kap sidecar-init", "other": "echo hi"})
+        ));
+        assert!(!has_kap_sidecar_init(
+            &serde_json::json!({"setup": "echo hi"})
+        ));
+    }
+
+    #[test]
+    fn existing_project_init_command_already_correct_no_warning() {
+        let dir = tempdir("init-cmd-already-correct");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(
+            dc.join("devcontainer.json"),
+            r#"{"service": "app", "initializeCommand": "kap sidecar-init"}"#,
+        )
+        .unwrap();
+
+        run(dir.to_str().unwrap(), true, false).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        assert_eq!(updated["initializeCommand"], "kap sidecar-init");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_project_post_start_object_auto_merged() {
+        let dir = tempdir("poststart-obj-merge");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(
+            dc.join("devcontainer.json"),
+            r#"{"service": "app", "postStartCommand": {"my-setup": "echo custom"}}"#,
+        )
+        .unwrap();
+
+        // --yes enables setup options, which should be merged into existing object
+        run(dir.to_str().unwrap(), true, false).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        let psc = updated["postStartCommand"].as_object().unwrap();
+        // Existing key preserved
+        assert_eq!(psc["my-setup"], "echo custom");
+        // Kap keys merged in
+        assert!(psc.contains_key("claude-code"));
 
         fs::remove_dir_all(&dir).unwrap();
     }
