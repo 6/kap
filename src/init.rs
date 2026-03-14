@@ -53,7 +53,7 @@ pub fn run(project_dir: &str, yes: bool, force: bool) -> Result<()> {
     if devcontainer_dir.exists() {
         run_existing(project, &devcontainer_dir, yes, force)
     } else {
-        run_new(project, &devcontainer_dir)
+        run_new(project, &devcontainer_dir, yes)
     }
 }
 
@@ -313,6 +313,165 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+struct SetupOptions {
+    install_claude_code: bool,
+    install_codex: bool,
+    ssh_signing: bool,
+}
+
+impl SetupOptions {
+    fn any_enabled(&self) -> bool {
+        self.install_claude_code || self.install_codex || self.ssh_signing
+    }
+}
+
+/// Check if the host uses a custom gpg.ssh.program that won't exist in the container
+/// (e.g. 1Password's op-ssh-sign, Secretive, etc.). Returns the program name if set
+/// and it's not already a portable binary like ssh-keygen or gpg.
+fn detect_ssh_signing_program() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", "gpg.ssh.program"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let program = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if program.is_empty() {
+        return None;
+    }
+    // ssh-keygen and gpg already work in containers — no override needed
+    let basename = program.rsplit('/').next().unwrap_or(&program);
+    if basename == "ssh-keygen" || basename == "gpg" || basename == "gpg2" {
+        return None;
+    }
+    Some(program)
+}
+
+fn is_1password_ssh_program(program: &str) -> bool {
+    program.contains("op-ssh-sign")
+}
+
+/// On macOS, create the 1Password SSH agent LaunchAgent if missing.
+/// This symlinks the 1Password agent socket to $SSH_AUTH_SOCK so Docker Desktop
+/// can forward it into containers.
+fn ensure_1password_launch_agent() -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let plist_dir = Path::new(&home).join("Library/LaunchAgents");
+    let plist_path = plist_dir.join("com.1password.SSH_AUTH_SOCK.plist");
+    if plist_path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&plist_dir)?;
+    let plist_content = include_str!("../static/com.1password.SSH_AUTH_SOCK.plist");
+    std::fs::write(&plist_path, plist_content)?;
+    let status = std::process::Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist_path)
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            println!("  Created 1Password SSH agent LaunchAgent.");
+            println!("  Restart Docker Desktop for SSH agent forwarding to take effect.");
+        }
+        _ => {
+            println!(
+                "  Wrote {} but launchctl load failed. Run manually:",
+                plist_path.display()
+            );
+            println!("    launchctl load -w {}", plist_path.display());
+        }
+    }
+    Ok(())
+}
+
+fn prompt_setup_options(yes: bool) -> SetupOptions {
+    let ssh_program = detect_ssh_signing_program();
+
+    if yes {
+        return SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: ssh_program.is_some(),
+        };
+    }
+
+    println!();
+    println!("  Optional setup (runs on each container start, idempotent):");
+    println!();
+
+    let install_claude_code = confirm("  Install Claude Code?");
+    let install_codex = confirm("  Install Codex (OpenAI)?");
+
+    let ssh_signing = if let Some(ref program) = ssh_program {
+        let basename = program.rsplit('/').next().unwrap_or(program);
+        println!("  SSH commit signing detected (gpg.ssh.program = {basename}).");
+        println!(
+            "  This program won't exist in the container; kap can override it with ssh-keygen."
+        );
+        confirm("  Configure git commit signing in container?")
+    } else {
+        false
+    };
+
+    SetupOptions {
+        install_claude_code,
+        install_codex,
+        ssh_signing,
+    }
+}
+
+/// If SSH signing is enabled and 1Password is the SSH program, ensure the
+/// macOS LaunchAgent exists so Docker Desktop can forward the agent.
+fn maybe_setup_1password_agent() {
+    if let Some(program) = detect_ssh_signing_program()
+        && is_1password_ssh_program(&program)
+        && let Err(e) = ensure_1password_launch_agent()
+    {
+        eprintln!("  Warning: could not create LaunchAgent: {e}");
+    }
+}
+
+fn generate_post_start_command(options: &SetupOptions) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    if options.install_claude_code {
+        obj.insert(
+            "claude-code".to_string(),
+            serde_json::Value::String(
+                "command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash"
+                    .to_string(),
+            ),
+        );
+    }
+    if options.install_codex {
+        obj.insert(
+            "codex".to_string(),
+            serde_json::Value::String(
+                "command -v codex >/dev/null 2>&1 || { command -v npm >/dev/null 2>&1 && npm install -g @openai/codex || true; }"
+                    .to_string(),
+            ),
+        );
+    }
+    if options.ssh_signing {
+        obj.insert(
+            "ssh-signing".to_string(),
+            serde_json::Value::String(
+                concat!(
+                    "git config --global gpg.ssh.program /usr/bin/ssh-keygen; ",
+                    "KEY=$(git config --global user.signingkey 2>/dev/null || true); ",
+                    "[ -n \"$KEY\" ] && echo \"$KEY\" > ~/.ssh-signing-key.pub ",
+                    "&& git config --global user.signingkey ~/.ssh-signing-key.pub || true",
+                )
+                .to_string(),
+            ),
+        );
+    }
+    serde_json::Value::Object(obj)
+}
+
 /// Existing project: create config, generate overlay, update devcontainer.json.
 fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool) -> Result<()> {
     let devcontainer_json_path = devcontainer_dir.join("devcontainer.json");
@@ -462,6 +621,21 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
         dc_obj["initializeCommand"] = serde_json::Value::String("kap sidecar-init".to_string());
     }
 
+    // Optional setup: AI tools and SSH signing
+    let setup = prompt_setup_options(yes);
+    if setup.any_enabled() {
+        if dc_obj.get("postStartCommand").is_some() {
+            notes.push(
+                "postStartCommand already set. Merge the setup commands manually.".to_string(),
+            );
+        } else {
+            dc_obj["postStartCommand"] = generate_post_start_command(&setup);
+        }
+    }
+    if setup.ssh_signing {
+        maybe_setup_1password_agent();
+    }
+
     // Prepend /opt/kap/bin to PATH so shims on the shared volume take precedence.
     // remoteEnv applies to all devcontainer exec and terminal sessions.
     if !detected_names.is_empty() {
@@ -500,7 +674,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
 }
 
 /// New project: create everything from scratch.
-fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
+fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
     std::fs::create_dir_all(devcontainer_dir)?;
 
     let project_name = project
@@ -509,6 +683,8 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "my-project".to_string());
 
+    let setup = prompt_setup_options(yes);
+
     write_file(&devcontainer_dir.join("kap.toml"), &generate_config())?;
     write_file(
         &devcontainer_dir.join("docker-compose.yml"),
@@ -516,8 +692,11 @@ fn run_new(project: &Path, devcontainer_dir: &Path) -> Result<()> {
     )?;
     write_file(
         &devcontainer_dir.join("devcontainer.json"),
-        &generate_devcontainer_json(&project_name, !detect_cli_tools().is_empty()),
+        &generate_devcontainer_json(&project_name, !detect_cli_tools().is_empty(), &setup),
     )?;
+    if setup.ssh_signing {
+        maybe_setup_1password_agent();
+    }
 
     // Generate the overlay so things work immediately
     let compose_config = ComposeConfig::default();
@@ -822,7 +1001,11 @@ fn generate_app_compose(project_name: &str) -> String {
     )
 }
 
-fn generate_devcontainer_json(project_name: &str, has_cli_tools: bool) -> String {
+fn generate_devcontainer_json(
+    project_name: &str,
+    has_cli_tools: bool,
+    setup: &SetupOptions,
+) -> String {
     let remote_env = if has_cli_tools {
         r#",
   "remoteEnv": {
@@ -831,6 +1014,15 @@ fn generate_devcontainer_json(project_name: &str, has_cli_tools: bool) -> String
     } else {
         ""
     };
+    let post_start = if setup.any_enabled() {
+        let cmd = generate_post_start_command(setup);
+        format!(
+            ",\n  \"postStartCommand\": {}",
+            serde_json::to_string(&cmd).unwrap()
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"{{
   "name": "{project_name}",
@@ -838,7 +1030,7 @@ fn generate_devcontainer_json(project_name: &str, has_cli_tools: bool) -> String
   "service": "app",
   "workspaceFolder": "/workspaces/{project_name}",
   "initializeCommand": "kap sidecar-init",
-  "remoteUser": "vscode"{remote_env}
+  "remoteUser": "vscode"{remote_env}{post_start}
 }}
 "#
     )
@@ -1452,6 +1644,263 @@ mod tests {
         let input = r#"{"name": "test", "arr": [1, 2]}"#;
         let val = parse_jsonc(input).unwrap();
         assert_eq!(val["name"], "test");
+    }
+
+    #[test]
+    fn setup_options_any_enabled() {
+        let none = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        assert!(!none.any_enabled());
+
+        let claude = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        assert!(claude.any_enabled());
+
+        let codex = SetupOptions {
+            install_claude_code: false,
+            install_codex: true,
+            ssh_signing: false,
+        };
+        assert!(codex.any_enabled());
+
+        let ssh = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            ssh_signing: true,
+        };
+        assert!(ssh.any_enabled());
+    }
+
+    #[test]
+    fn post_start_command_claude_only() {
+        let opts = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let obj = cmd.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(
+            obj["claude-code"]
+                .as_str()
+                .unwrap()
+                .contains("claude.ai/install.sh")
+        );
+    }
+
+    #[test]
+    fn post_start_command_codex_only() {
+        let opts = SetupOptions {
+            install_claude_code: false,
+            install_codex: true,
+            ssh_signing: false,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let obj = cmd.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj["codex"].as_str().unwrap().contains("@openai/codex"));
+    }
+
+    #[test]
+    fn post_start_command_ssh_signing_only() {
+        let opts = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            ssh_signing: true,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let obj = cmd.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj["ssh-signing"].as_str().unwrap().contains("ssh-keygen"));
+    }
+
+    #[test]
+    fn post_start_command_all_enabled() {
+        let opts = SetupOptions {
+            install_claude_code: true,
+            install_codex: true,
+            ssh_signing: true,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let obj = cmd.as_object().unwrap();
+        assert_eq!(obj.len(), 3);
+        assert!(obj.contains_key("claude-code"));
+        assert!(obj.contains_key("codex"));
+        assert!(obj.contains_key("ssh-signing"));
+    }
+
+    #[test]
+    fn devcontainer_json_with_setup_has_post_start() {
+        let setup = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        let json_str = generate_devcontainer_json("test", false, &setup);
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let psc = json["postStartCommand"].as_object().unwrap();
+        assert!(psc.contains_key("claude-code"));
+    }
+
+    #[test]
+    fn devcontainer_json_without_setup_has_no_post_start() {
+        let setup = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        let json_str = generate_devcontainer_json("test", false, &setup);
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert!(json.get("postStartCommand").is_none());
+    }
+
+    #[test]
+    fn post_start_command_claude_is_idempotent() {
+        let opts = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let s = cmd["claude-code"].as_str().unwrap();
+        // Must check before installing (idempotent guard)
+        assert!(s.starts_with("command -v claude"));
+    }
+
+    #[test]
+    fn post_start_command_codex_is_idempotent() {
+        let opts = SetupOptions {
+            install_claude_code: false,
+            install_codex: true,
+            ssh_signing: false,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let s = cmd["codex"].as_str().unwrap();
+        // Must check before installing (idempotent guard)
+        assert!(s.starts_with("command -v codex"));
+        // Must also check that npm exists
+        assert!(s.contains("command -v npm"));
+    }
+
+    #[test]
+    fn post_start_command_ssh_overrides_program_and_extracts_key() {
+        let opts = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            ssh_signing: true,
+        };
+        let cmd = generate_post_start_command(&opts);
+        let s = cmd["ssh-signing"].as_str().unwrap();
+        // Must override gpg.ssh.program to ssh-keygen
+        assert!(s.contains("gpg.ssh.program /usr/bin/ssh-keygen"));
+        // Must extract signing key to a file
+        assert!(s.contains("user.signingkey"));
+        assert!(s.contains(".ssh-signing-key.pub"));
+    }
+
+    #[test]
+    fn devcontainer_json_with_all_setup_has_all_commands() {
+        let setup = SetupOptions {
+            install_claude_code: true,
+            install_codex: true,
+            ssh_signing: true,
+        };
+        let json_str = generate_devcontainer_json("myproject", false, &setup);
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let psc = json["postStartCommand"].as_object().unwrap();
+        assert_eq!(psc.len(), 3);
+        assert!(psc.contains_key("claude-code"));
+        assert!(psc.contains_key("codex"));
+        assert!(psc.contains_key("ssh-signing"));
+        // Other fields should still be present
+        assert_eq!(json["name"], "myproject");
+        assert_eq!(json["initializeCommand"], "kap sidecar-init");
+    }
+
+    #[test]
+    fn devcontainer_json_with_setup_and_cli_tools() {
+        let setup = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            ssh_signing: false,
+        };
+        let json_str = generate_devcontainer_json("test", true, &setup);
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        // Both postStartCommand and remoteEnv should be present
+        assert!(json.get("postStartCommand").is_some());
+        assert!(
+            json["remoteEnv"]["PATH"]
+                .as_str()
+                .unwrap()
+                .contains("/opt/kap/bin")
+        );
+    }
+
+    #[test]
+    fn devcontainer_json_is_valid_json_with_setup() {
+        // Ensure the string-template approach produces valid JSON for all combos
+        for (claude, codex, ssh) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            let setup = SetupOptions {
+                install_claude_code: claude,
+                install_codex: codex,
+                ssh_signing: ssh,
+            };
+            for has_cli in [false, true] {
+                let json_str = generate_devcontainer_json("test", has_cli, &setup);
+                let parsed: Result<serde_json::Value, _> = serde_json::from_str(&json_str);
+                assert!(
+                    parsed.is_ok(),
+                    "Invalid JSON for claude={claude}, codex={codex}, ssh={ssh}, cli={has_cli}: {json_str}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn is_1password_ssh_program_matches() {
+        assert!(is_1password_ssh_program(
+            "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+        ));
+        assert!(is_1password_ssh_program("op-ssh-sign"));
+        assert!(!is_1password_ssh_program("/usr/bin/ssh-keygen"));
+        assert!(!is_1password_ssh_program("secretive"));
+        assert!(!is_1password_ssh_program("gpg"));
+    }
+
+    #[test]
+    fn existing_project_with_post_start_command_not_overwritten() {
+        let dir = tempdir("setup-existing-poststartcmd");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(
+            dc.join("devcontainer.json"),
+            r#"{"service": "app", "postStartCommand": "echo existing"}"#,
+        )
+        .unwrap();
+
+        // --yes enables claude code, but postStartCommand already set
+        run(dir.to_str().unwrap(), true, false).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dc.join("devcontainer.json")).unwrap())
+                .unwrap();
+        // Should preserve existing postStartCommand
+        assert_eq!(updated["postStartCommand"], "echo existing");
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn tempdir(suffix: &str) -> std::path::PathBuf {

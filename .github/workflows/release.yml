@@ -185,6 +185,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine Docker tags
+        id: docker-tags
+        run: |
+          TAGS="ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.tag }}"
+          if [ "${{ needs.prepare.outputs.prerelease }}" != "true" ]; then
+            TAGS="${TAGS}
+          ghcr.io/${{ github.repository }}:latest"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:
@@ -193,6 +207,4 @@ jobs:
           target: proxy
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.tag }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
