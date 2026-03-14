@@ -444,8 +444,8 @@ async function loadSessions() {
     if (!sessions.length) { el.innerHTML = '<div class="empty">No sessions found</div>'; return; }
     el.innerHTML = sessions.map(s => `
       <div class="session-item" onclick="openSession('${esc(s.id)}')">
-        <div class="sid">${esc(s.id.slice(0,8))}…</div>
-        <div class="meta">${esc(s.project)} · ${s.event_count} events</div>
+        <div class="sid">${esc(s.project)}</div>
+        <div class="meta">${s.event_count} events · ${timeAgo(s.last_event)} · ${esc(s.id.slice(0,8))}…</div>
       </div>
     `).join('');
   } catch(e) {
@@ -617,6 +617,17 @@ function loadSettings() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
+}
 
 init();
 </script>

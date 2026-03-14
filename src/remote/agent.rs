@@ -67,18 +67,22 @@ struct RawMessage {
 /// Sessions live at ~/.claude/projects/*/  with *.jsonl files.
 /// Excludes subagent sessions (under /subagents/ directories).
 pub fn discover_sessions(app_container: &str) -> Result<Vec<SessionInfo>> {
-    // Single docker exec: find session files (excluding subagents), then for each
-    // print the path, line count, and first 5 lines separated by a marker.
-    // This avoids N+1 docker exec calls which are slow (~300ms each).
+    // Search only ~/.claude/projects/ directories (not the entire filesystem).
+    // For each session file: print path, line count, first 5 lines (for branch),
+    // and last 3 lines (for last_event timestamp).
     let output = containers::exec_in(
         app_container,
         &[
             "sh",
             "-c",
-            r#"find /home /root -path '*/.claude/projects/*/*.jsonl' -not -path '*/subagents/*' -type f 2>/dev/null | while read -r f; do
+            r#"for d in /home/*/.claude/projects /root/.claude/projects; do
+  [ -d "$d" ] || continue
+  find "$d" -maxdepth 2 -name '*.jsonl' -not -path '*/subagents/*' -type f 2>/dev/null
+done | while read -r f; do
   wc=$(wc -l < "$f" 2>/dev/null || echo 0)
   head=$(head -5 "$f" 2>/dev/null)
-  printf '@@KAP_SESSION@@%s@@%s\n%s\n' "$f" "$wc" "$head"
+  tail=$(tail -3 "$f" 2>/dev/null)
+  printf '@@KAP_SESSION@@%s@@%s\n%s\n@@KAP_TAIL@@\n%s\n' "$f" "$wc" "$head" "$tail"
 done"#,
         ],
     )
@@ -92,26 +96,35 @@ done"#,
             continue;
         }
 
-        // Format: {path}@@{line_count}\n{head lines...}
-        let (header, head) = block.split_once('\n').unwrap_or((block, ""));
+        // Format: {path}@@{line_count}\n{head lines}\n@@KAP_TAIL@@\n{tail lines}
+        let (header, rest) = block.split_once('\n').unwrap_or((block, ""));
         let (path, wc_str) = header.rsplit_once("@@").unwrap_or((header, "0"));
         let event_count = wc_str.trim().parse::<usize>().unwrap_or(0);
 
+        let (head, tail) = rest.split_once("@@KAP_TAIL@@").unwrap_or((rest, ""));
+
         let filename = path.rsplit('/').next().unwrap_or("");
         let session_id = filename.strip_suffix(".jsonl").unwrap_or(filename);
-        let project = extract_project_name(path);
+        let project_hash = extract_project_name(path);
+        let project = decode_project_name(&project_hash);
 
         let mut branch = None;
-        let mut last_ts = None;
-
         for line in head.lines() {
-            if let Ok(evt) = serde_json::from_str::<RawEvent>(line) {
-                if branch.is_none() {
-                    branch = evt.git_branch;
-                }
-                if last_ts.is_none() {
-                    last_ts = evt.timestamp;
-                }
+            if let Ok(evt) = serde_json::from_str::<RawEvent>(line)
+                && branch.is_none()
+            {
+                branch = evt.git_branch;
+            }
+        }
+
+        // Get last timestamp from the tail of the file
+        let mut last_ts = None;
+        for line in tail.lines().rev() {
+            if let Ok(evt) = serde_json::from_str::<RawEvent>(line)
+                && evt.timestamp.is_some()
+            {
+                last_ts = evt.timestamp;
+                break;
             }
         }
 
@@ -123,6 +136,9 @@ done"#,
             event_count,
         });
     }
+
+    // Sort by last_event descending (newest first)
+    sessions.sort_by(|a, b| b.last_event.cmp(&a.last_event));
 
     Ok(sessions)
 }
@@ -353,7 +369,7 @@ fn extract_tool_name(event_type: &str, msg: Option<&RawMessage>) -> Option<Strin
     None
 }
 
-/// Extract project name from a session file path.
+/// Extract the raw project hash from a session file path.
 fn extract_project_name(path: &str) -> String {
     // Path: .../projects/{project-hash}/{session_id}.jsonl
     let parts: Vec<&str> = path.split('/').collect();
@@ -365,6 +381,23 @@ fn extract_project_name(path: &str) -> String {
     "unknown".to_string()
 }
 
+/// Decode a Claude Code project hash into a human-readable name.
+/// Claude encodes workspace paths by replacing `/` with `-`, e.g.
+/// `/Users/peter/oss/kap` → `-Users-peter-oss-kap`.
+/// We strip known home directory prefixes for readability.
+fn decode_project_name(encoded: &str) -> String {
+    let stripped = encoded.strip_prefix('-').unwrap_or(encoded);
+    // Strip home dir prefix: "Users-{user}-..." or "home-{user}-..."
+    for prefix in &["Users-", "home-"] {
+        if let Some(after) = stripped.strip_prefix(prefix)
+            && let Some((_, rest)) = after.split_once('-')
+        {
+            return rest.to_string();
+        }
+    }
+    stripped.to_string()
+}
+
 /// Find the full path to a session's JSONL file in the container.
 fn find_session_path(app_container: &str, session_id: &str) -> Result<String> {
     let output = containers::exec_in(
@@ -373,7 +406,9 @@ fn find_session_path(app_container: &str, session_id: &str) -> Result<String> {
             "sh",
             "-c",
             &format!(
-                "find /home /root -name '{session_id}.jsonl' -path '*/.claude/projects/*' 2>/dev/null | head -1"
+                "for d in /home/*/.claude/projects /root/.claude/projects; do \
+                   [ -d \"$d\" ] && find \"$d\" -maxdepth 2 -name '{session_id}.jsonl' 2>/dev/null; \
+                 done | head -1"
             ),
         ],
     )
@@ -477,6 +512,38 @@ mod tests {
             extract_project_name("/home/user/.claude/projects/-Users-peter-oss-foo/abc.jsonl"),
             "-Users-peter-oss-foo"
         );
+    }
+
+    #[test]
+    fn decode_project_name_macos() {
+        assert_eq!(decode_project_name("-Users-peter-oss-kap"), "oss-kap");
+    }
+
+    #[test]
+    fn decode_project_name_linux() {
+        assert_eq!(
+            decode_project_name("-home-ubuntu-projects-my-app"),
+            "projects-my-app"
+        );
+    }
+
+    #[test]
+    fn decode_project_name_tmp() {
+        assert_eq!(
+            decode_project_name("-tmp-cambria-quick-test"),
+            "tmp-cambria-quick-test"
+        );
+    }
+
+    #[test]
+    fn decode_project_name_no_prefix() {
+        assert_eq!(decode_project_name("some-project"), "some-project");
+    }
+
+    #[test]
+    fn decode_project_name_short_path() {
+        // Only username, no subdirectory
+        assert_eq!(decode_project_name("-Users-peter"), "Users-peter");
     }
 
     #[test]
