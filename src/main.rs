@@ -217,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::SidecarCliShim { tool, args } => cli::shim::run(&tool, &args).await,
-        Command::Down { project, volumes } => container::down(project, volumes),
+        Command::Down { project, volumes } => container::down(project, None, volumes),
         Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::Init {
             project_dir,
@@ -351,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
             DevCommand::Push => dev::push(),
         },
         Command::Status => status::run(),
-        Command::Up { reset } => container::up(reset),
+        Command::Up { reset } => container::up(None, reset),
         Command::WhyDenied { tail, log } => {
             if std::path::Path::new(&log).exists() {
                 // Running inside the container

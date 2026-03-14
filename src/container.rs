@@ -4,16 +4,69 @@
 /// only need one tool (`kap`) for everything.
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+
+/// Options for executing a command in a devcontainer.
+///
+/// Use [`ExecOptions::new`] for explicit workspace path or [`ExecOptions::cwd`]
+/// to fall back to the current working directory.
+pub struct ExecOptions {
+    pub workspace: Option<PathBuf>,
+    pub cmd: Vec<String>,
+    pub stdin: Option<Stdio>,
+    pub stdout: Option<Stdio>,
+    pub stderr: Option<Stdio>,
+}
+
+impl ExecOptions {
+    /// Create options for running a command in the workspace at the given path.
+    pub fn new(workspace: impl Into<PathBuf>, cmd: Vec<String>) -> Self {
+        Self {
+            workspace: Some(workspace.into()),
+            cmd,
+            stdin: None,
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    /// Create options using the current working directory as workspace.
+    pub fn cwd(cmd: Vec<String>) -> Self {
+        Self {
+            workspace: None,
+            cmd,
+            stdin: None,
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    pub fn stdin(mut self, stdio: Stdio) -> Self {
+        self.stdin = Some(stdio);
+        self
+    }
+
+    pub fn stdout(mut self, stdio: Stdio) -> Self {
+        self.stdout = Some(stdio);
+        self
+    }
+
+    pub fn stderr(mut self, stdio: Stdio) -> Self {
+        self.stderr = Some(stdio);
+        self
+    }
+}
 
 /// Start the devcontainer.
-pub fn up(reset: bool) -> Result<()> {
-    require_kap_init()?;
+///
+/// If `workspace` is `Some`, uses that path. Otherwise falls back to CWD.
+pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
+    require_kap_init_at(workspace)?;
     require_devcontainer()?;
-    let workspace = workspace_folder()?;
+    let workspace = resolve_workspace_folder(workspace)?;
 
     // On --reset, pull the latest sidecar image so we don't reuse a stale cache.
-    if reset && let Some(image) = sidecar_image() {
+    if reset && let Some(image) = sidecar_image_at(&workspace) {
         eprintln!("Pulling {image}...");
         let _ = Command::new("docker")
             .args(["pull", &image])
@@ -64,8 +117,10 @@ pub fn up(reset: bool) -> Result<()> {
 }
 
 /// Stop and remove the devcontainer.
-pub fn down(project: Option<String>, volumes: bool) -> Result<()> {
-    let project = resolve_project(project)?;
+///
+/// Project can be resolved from an explicit name, a workspace path, or CWD.
+pub fn down(project: Option<String>, workspace: Option<&Path>, volumes: bool) -> Result<()> {
+    let project = resolve_project_from(project, workspace)?;
 
     let mut cmd = Command::new("docker");
     cmd.args(["compose", "-p", &project, "down"]);
@@ -92,33 +147,21 @@ pub fn down(project: Option<String>, volumes: bool) -> Result<()> {
 }
 
 /// Run a command in the devcontainer (default: interactive shell).
+///
+/// For programmatic use with output capture, use [`exec_with`] instead.
 pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
-    require_devcontainer()?;
-
     let workspace = match &project {
-        Some(name) => resolve_workspace(name)?,
-        None => workspace_folder()?,
+        Some(name) => Some(resolve_workspace(name)?),
+        None => None,
     };
 
-    let shell_cmd = if cmd.is_empty() {
-        vec!["/bin/bash".to_string()]
-    } else {
-        cmd
-    };
-
-    let mut child = Command::new("devcontainer");
-    child
-        .arg("exec")
-        .arg("--workspace-folder")
-        .arg(&workspace)
-        .args(&shell_cmd);
-
-    let status = child
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .context("running devcontainer exec")?;
+    let status = exec_with(ExecOptions {
+        workspace,
+        cmd,
+        stdin: None,
+        stdout: None,
+        stderr: None,
+    })?;
 
     if !status.success() {
         anyhow::bail!(
@@ -128,6 +171,34 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Execute a command in the devcontainer with full control over I/O.
+///
+/// Returns the process exit status. For interactive use, prefer [`exec`].
+pub fn exec_with(opts: ExecOptions) -> Result<ExitStatus> {
+    require_devcontainer()?;
+
+    let workspace = resolve_workspace_folder(opts.workspace.as_deref())?;
+
+    let shell_cmd = if opts.cmd.is_empty() {
+        vec!["/bin/bash".to_string()]
+    } else {
+        opts.cmd
+    };
+
+    let status = Command::new("devcontainer")
+        .arg("exec")
+        .arg("--workspace-folder")
+        .arg(&workspace)
+        .args(&shell_cmd)
+        .stdin(opts.stdin.unwrap_or_else(Stdio::inherit))
+        .stdout(opts.stdout.unwrap_or_else(Stdio::inherit))
+        .stderr(opts.stderr.unwrap_or_else(Stdio::inherit))
+        .status()
+        .context("running devcontainer exec")?;
+
+    Ok(status)
 }
 
 /// List all running devcontainers.
@@ -205,6 +276,24 @@ fn print_container_line(
         ),
         None => println!("  {label:<6} {container}"),
     }
+}
+
+/// Resolve project name from an explicit name, a workspace path, or CWD.
+fn resolve_project_from(project: Option<String>, workspace: Option<&Path>) -> Result<String> {
+    if let Some(name) = project {
+        return resolve_project(Some(name));
+    }
+    if let Some(ws) = workspace {
+        return find_compose_project(ws)
+            .or_else(|| derive_compose_project(ws))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not determine compose project name for {}",
+                    ws.display()
+                )
+            });
+    }
+    resolve_project(None)
 }
 
 /// Resolve project name: if given, validate it exists; if not, derive from CWD.
@@ -290,9 +379,8 @@ fn find_sidecar() -> Option<String> {
         .map(String::from)
 }
 
-/// Read the sidecar image from .devcontainer/kap.toml (if it uses an image, not a build).
-fn sidecar_image() -> Option<String> {
-    let content = std::fs::read_to_string(".devcontainer/kap.toml").ok()?;
+fn sidecar_image_at(workspace: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(workspace.join(".devcontainer/kap.toml")).ok()?;
     let config: crate::config::Config = toml::from_str(&content).ok()?;
     let compose = config.compose.unwrap_or_default();
     compose.sidecar_image().map(String::from)
@@ -300,8 +388,16 @@ fn sidecar_image() -> Option<String> {
 
 /// Check that `kap init` has been run in the current directory.
 pub fn require_kap_init() -> Result<()> {
-    let path = Path::new(".devcontainer/kap.toml");
-    if !path.exists() {
+    require_kap_init_at(None)
+}
+
+/// Check that `kap init` has been run at the given path (or CWD if None).
+pub fn require_kap_init_at(workspace: Option<&Path>) -> Result<()> {
+    let kap_toml = match workspace {
+        Some(p) => p.join(".devcontainer/kap.toml"),
+        None => PathBuf::from(".devcontainer/kap.toml"),
+    };
+    if !kap_toml.exists() {
         anyhow::bail!("No kap.toml found. Run `kap init` first to set up your devcontainer.");
     }
     Ok(())
@@ -322,6 +418,26 @@ fn require_devcontainer() -> Result<()> {
     }
 }
 
+/// Resolve a workspace folder, verifying `.devcontainer/devcontainer.json` exists.
+///
+/// If `path` is `Some`, validates that path. If `None`, falls back to CWD.
+pub fn resolve_workspace_folder(path: Option<&Path>) -> Result<PathBuf> {
+    match path {
+        Some(p) => {
+            let dc_json = p.join(".devcontainer/devcontainer.json");
+            if !dc_json.exists() {
+                anyhow::bail!(
+                    "no .devcontainer/devcontainer.json in {}.\n\n  \
+                     Run `kap init` first.",
+                    p.display()
+                );
+            }
+            Ok(p.to_path_buf())
+        }
+        None => workspace_folder(),
+    }
+}
+
 /// Get the workspace folder (CWD), verifying .devcontainer/ exists.
 fn workspace_folder() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("getting current directory")?;
@@ -336,7 +452,7 @@ fn workspace_folder() -> Result<PathBuf> {
 }
 
 /// Find the compose project name from running containers matching this workspace.
-pub(crate) fn find_compose_project(workspace: &Path) -> Option<String> {
+pub fn find_compose_project(workspace: &Path) -> Option<String> {
     let workspace_str = workspace.to_string_lossy();
     let output = Command::new("docker")
         .args([
@@ -358,7 +474,7 @@ pub(crate) fn find_compose_project(workspace: &Path) -> Option<String> {
 
 /// Derive the compose project name from the workspace directory name.
 /// Matches the devcontainer CLI convention: `{dirname}_devcontainer`.
-fn derive_compose_project(workspace: &Path) -> Option<String> {
+pub fn derive_compose_project(workspace: &Path) -> Option<String> {
     let dirname = workspace.file_name()?.to_string_lossy();
     Some(format!("{dirname}_devcontainer"))
 }
@@ -420,5 +536,80 @@ mod tests {
 
         std::env::set_current_dir(original).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_workspace_folder_with_explicit_path() {
+        let dir =
+            std::env::temp_dir().join(format!("kap-resolve-ws-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join(".devcontainer/devcontainer.json"), "{}").unwrap();
+
+        let result = resolve_workspace_folder(Some(&dir));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), dir);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_workspace_folder_explicit_path_missing_devcontainer() {
+        let dir = std::env::temp_dir()
+            .join(format!("kap-resolve-ws-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = resolve_workspace_folder(Some(&dir));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("devcontainer.json"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn require_kap_init_at_with_explicit_path() {
+        let dir =
+            std::env::temp_dir().join(format!("kap-init-at-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join(".devcontainer/kap.toml"), "").unwrap();
+
+        let result = require_kap_init_at(Some(&dir));
+        assert!(result.is_ok());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn require_kap_init_at_explicit_path_missing() {
+        let dir = std::env::temp_dir()
+            .join(format!("kap-init-at-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = require_kap_init_at(Some(&dir));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("kap init"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn exec_options_builder() {
+        let opts = ExecOptions::new("/tmp/project", vec!["bash".into(), "-lc".into(), "echo hi".into()])
+            .stdin(Stdio::null());
+
+        assert_eq!(opts.workspace, Some(PathBuf::from("/tmp/project")));
+        assert_eq!(opts.cmd, vec!["bash", "-lc", "echo hi"]);
+        assert!(opts.stdin.is_some());
+        assert!(opts.stdout.is_none());
+        assert!(opts.stderr.is_none());
+    }
+
+    #[test]
+    fn exec_options_cwd_builder() {
+        let opts = ExecOptions::cwd(vec!["ls".into()]);
+        assert!(opts.workspace.is_none());
+        assert_eq!(opts.cmd, vec!["ls"]);
     }
 }
