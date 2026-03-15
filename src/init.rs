@@ -435,13 +435,11 @@ fn has_kap_sidecar_init(value: &serde_json::Value) -> bool {
 
 fn generate_post_start_command() -> serde_json::Value {
     let mut obj = serde_json::Map::new();
-    // Wrap in a wait loop: the sidecar writes the script to the shared volume
-    // on startup, but postStartCommand may run before it's ready.
-    let script = format!("/opt/kap/bin/{}", crate::reload::POST_START_FILENAME);
     obj.insert(
         "kap-setup".to_string(),
         serde_json::Value::String(format!(
-            "bash -c 'for i in $(seq 30); do [ -x {script} ] && exec {script}; sleep 1; done; echo \"[kap] warning: {script} not ready after 30s\"'"
+            "/opt/kap/bin/{}",
+            crate::reload::POST_START_FILENAME
         )),
     );
     serde_json::Value::Object(obj)
@@ -1689,7 +1687,7 @@ mod tests {
         assert_eq!(obj.len(), 1);
         let path = obj["kap-setup"].as_str().unwrap();
         assert!(path.contains("kap-post-start"));
-        assert!(path.contains("/opt/kap/bin/"));
+        assert!(path.starts_with("/opt/kap/bin/"));
     }
 
     #[test]
