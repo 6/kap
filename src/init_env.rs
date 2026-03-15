@@ -27,17 +27,6 @@ pub fn run(project_dir: &str) -> Result<()> {
         eprintln!("[sidecar-init] warning: could not regenerate overlay: {e}");
     }
 
-    // Write post-start script to .devcontainer/ so it's available immediately
-    // via the workspace bind mount, without waiting for the sidecar to start.
-    if let Err(e) = write_post_start_to_workspace(&devcontainer_dir, &config_path) {
-        eprintln!("[sidecar-init] warning: could not write post-start script: {e}");
-    }
-
-    // Migrate devcontainer.json if it still references the old shared-volume path
-    if let Err(e) = migrate_post_start_path(&devcontainer_dir) {
-        eprintln!("[sidecar-init] warning: could not migrate postStartCommand path: {e}");
-    }
-
     let needed_vars = vars_from_config(&config_path)?;
 
     // Load existing .env values and shell patterns (# KEY=$(cmd))
@@ -240,37 +229,6 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
     vars.sort();
     vars.dedup();
     Ok(vars)
-}
-
-/// Write the post-start script to `.devcontainer/` so it's available via the
-/// workspace bind mount before the sidecar starts. This avoids the race where
-/// `postStartCommand` runs before the sidecar writes to the shared volume.
-fn write_post_start_to_workspace(devcontainer_dir: &Path, config_path: &Path) -> Result<()> {
-    let content = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config: crate::config::Config =
-        toml::from_str(&content).with_context(|| format!("parsing {}", config_path.display()))?;
-    crate::reload::write_post_start_script(&config, devcontainer_dir)?;
-    Ok(())
-}
-
-/// Old path used in devcontainer.json postStartCommand before the script was
-/// moved to the workspace bind mount.
-const OLD_POST_START_PATH: &str = "/opt/kap/bin/kap-post-start";
-
-/// Migrate devcontainer.json from the old shared-volume path to the workspace path.
-fn migrate_post_start_path(devcontainer_dir: &Path) -> Result<()> {
-    let dc_path = devcontainer_dir.join("devcontainer.json");
-    let raw = std::fs::read_to_string(&dc_path)
-        .with_context(|| format!("reading {}", dc_path.display()))?;
-    if !raw.contains(OLD_POST_START_PATH) {
-        return Ok(());
-    }
-    let new_path = format!(".devcontainer/{}", crate::reload::POST_START_FILENAME,);
-    let updated = raw.replace(OLD_POST_START_PATH, &new_path);
-    std::fs::write(&dc_path, &updated).with_context(|| format!("writing {}", dc_path.display()))?;
-    eprintln!("[sidecar-init] migrated postStartCommand to workspace path");
-    Ok(())
 }
 
 /// Extract ${VAR} references from a string.
@@ -553,59 +511,6 @@ allow = ["github.com"]
             // but verify it doesn't panic
             let _ = result;
         }
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn migrate_post_start_path_rewrites_old_path() {
-        let dir = std::env::temp_dir().join(format!("kap-migrate-ps-{}", std::process::id()));
-        let dc = dir.join(".devcontainer");
-        std::fs::create_dir_all(&dc).unwrap();
-        std::fs::write(
-            dc.join("devcontainer.json"),
-            r#"{"postStartCommand": {"kap-setup": "/opt/kap/bin/kap-post-start"}}"#,
-        )
-        .unwrap();
-
-        migrate_post_start_path(&dc).unwrap();
-
-        let updated = std::fs::read_to_string(dc.join("devcontainer.json")).unwrap();
-        assert!(!updated.contains("/opt/kap/bin/kap-post-start"));
-        assert!(updated.contains(".devcontainer/kap-post-start"));
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn migrate_post_start_path_noop_when_already_migrated() {
-        let dir = std::env::temp_dir().join(format!("kap-migrate-ps-noop-{}", std::process::id()));
-        let dc = dir.join(".devcontainer");
-        std::fs::create_dir_all(&dc).unwrap();
-        let content = r#"{"postStartCommand": {"kap-setup": ".devcontainer/kap-post-start"}}"#;
-        std::fs::write(dc.join("devcontainer.json"), content).unwrap();
-
-        migrate_post_start_path(&dc).unwrap();
-
-        let after = std::fs::read_to_string(dc.join("devcontainer.json")).unwrap();
-        assert_eq!(after, content);
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn write_post_start_to_workspace_creates_script() {
-        let dir = std::env::temp_dir().join(format!("kap-ws-ps-{}", std::process::id()));
-        let dc = dir.join(".devcontainer");
-        std::fs::create_dir_all(&dc).unwrap();
-        std::fs::write(dc.join("kap.toml"), "[setup]\nclaude_code = true\n").unwrap();
-
-        write_post_start_to_workspace(&dc, &dc.join("kap.toml")).unwrap();
-
-        let script_path = dc.join(crate::reload::POST_START_FILENAME);
-        assert!(script_path.exists());
-        let content = std::fs::read_to_string(&script_path).unwrap();
-        assert!(content.contains("claude.ai/install.sh"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

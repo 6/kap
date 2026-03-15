@@ -249,7 +249,6 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     let entries = [
         format!(".devcontainer/{OVERLAY_FILENAME}"),
         ".devcontainer/.env".to_string(),
-        format!(".devcontainer/{}", crate::reload::POST_START_FILENAME),
     ];
 
     let existing = if gitignore_path.exists() {
@@ -436,11 +435,13 @@ fn has_kap_sidecar_init(value: &serde_json::Value) -> bool {
 
 fn generate_post_start_command() -> serde_json::Value {
     let mut obj = serde_json::Map::new();
+    // Wrap in a wait loop: the sidecar writes the script to the shared volume
+    // on startup, but postStartCommand may run before it's ready.
+    let script = format!("/opt/kap/bin/{}", crate::reload::POST_START_FILENAME);
     obj.insert(
         "kap-setup".to_string(),
         serde_json::Value::String(format!(
-            ".devcontainer/{}",
-            crate::reload::POST_START_FILENAME
+            "bash -c 'for i in $(seq 30); do [ -x {script} ] && exec {script}; sleep 1; done; echo \"[kap] warning: {script} not ready after 30s\"'"
         )),
     );
     serde_json::Value::Object(obj)
@@ -1688,7 +1689,7 @@ mod tests {
         assert_eq!(obj.len(), 1);
         let path = obj["kap-setup"].as_str().unwrap();
         assert!(path.contains("kap-post-start"));
-        assert!(path.starts_with(".devcontainer/"));
+        assert!(path.contains("/opt/kap/bin/"));
     }
 
     #[test]
