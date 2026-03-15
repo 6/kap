@@ -106,6 +106,36 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
             .status();
     }
 
+    // If a cached dev binary exists, deploy it to the sidecar so the container
+    // runs the same kap version as the host. This breaks the catch-22 where
+    // `kap dev push` needs a running sidecar but `kap up` starts with the
+    // published image.
+    let dev_binary = crate::dev::cached_binary_path();
+    if dev_binary.exists()
+        && let Some(sidecar) = find_sidecar()
+    {
+        eprintln!("[dev] deploying cached binary to sidecar...");
+        crate::dev::deploy_to_sidecars(&dev_binary, &[sidecar]);
+    }
+
+    // Wait for the sidecar to become healthy before running status checks.
+    // The sidecar writes CLI shims on startup; without this wait, `which <tool>`
+    // fails because the shim hasn't been written to the shared volume yet.
+    if let Some(sidecar) = find_sidecar() {
+        for _ in 0..15 {
+            let output = Command::new("docker")
+                .args(["inspect", "--format", "{{.State.Health.Status}}", &sidecar])
+                .output();
+            if let Ok(out) = output {
+                let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if status == "healthy" {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     // Show health checks after successful start
     println!();
     if let Err(e) = crate::status::run() {

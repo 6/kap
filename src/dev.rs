@@ -1,10 +1,23 @@
 /// Development tools for working on kap itself.
 ///
-/// `kap dev push` builds a Linux binary from the current source and
-/// deploys it to all running sidecar containers, avoiding the need
-/// to publish a new Docker image for every code change.
+/// `kap dev push` builds a Linux binary from the current source,
+/// caches it at `~/.kap/dev/kap-linux`, and deploys it to all running
+/// sidecar containers. If no sidecars are running, the binary is still
+/// built and cached so that the next `kap up` can deploy it automatically.
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 use std::process::Command;
+
+/// Path to the cached dev Linux binary.
+pub fn cached_binary_path() -> PathBuf {
+    dirs_home().join(".kap").join("dev").join("kap-linux")
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
 
 pub fn push() -> Result<()> {
     // 1. Verify we're in the kap source directory
@@ -18,11 +31,8 @@ pub fn push() -> Result<()> {
         );
     }
 
-    // 2. Find all running kap sidecar containers (fail fast before slow builds)
+    // 2. Find all running kap sidecar containers
     let sidecars = find_all_sidecars()?;
-    if sidecars.is_empty() {
-        anyhow::bail!("no running sidecar containers found — start one with `kap up` first");
-    }
 
     // 3. Build host binary
     eprintln!("[dev] building host binary...");
@@ -46,8 +56,10 @@ pub fn push() -> Result<()> {
         anyhow::bail!("docker build failed");
     }
 
-    // 5. Extract the Linux binary from the image
-    let tmp_binary = std::env::temp_dir().join("kap-dev-linux");
+    // 5. Extract the Linux binary from the image and cache it
+    let cache_path = cached_binary_path();
+    std::fs::create_dir_all(cache_path.parent().unwrap())?;
+
     let create_output = Command::new("docker")
         .args(["create", "kap-dev"])
         .output()
@@ -63,7 +75,7 @@ pub fn push() -> Result<()> {
         .args([
             "cp",
             &format!("{container_id}:/usr/local/bin/kap"),
-            tmp_binary.to_str().unwrap(),
+            cache_path.to_str().unwrap(),
         ])
         .status();
 
@@ -71,40 +83,23 @@ pub fn push() -> Result<()> {
     let _ = Command::new("docker").args(["rm", &container_id]).output();
 
     cp_status.context("failed to extract binary from image")?;
+    eprintln!("[dev] cached Linux binary at {}", cache_path.display());
 
-    // 7. Copy binary + restart each sidecar
-    for sidecar in &sidecars {
-        eprintln!("[dev] deploying to {sidecar}...");
-        let status = Command::new("docker")
-            .args([
-                "cp",
-                tmp_binary.to_str().unwrap(),
-                &format!("{sidecar}:/usr/local/bin/kap"),
-            ])
-            .status()
-            .context("docker cp failed")?;
-        if !status.success() {
-            eprintln!("[dev] warning: failed to copy binary to {sidecar}");
-            continue;
-        }
-
-        let status = Command::new("docker")
-            .args(["restart", sidecar])
-            .status()
-            .context("docker restart failed")?;
-        if !status.success() {
-            eprintln!("[dev] warning: failed to restart {sidecar}");
-        }
+    // 6. Deploy to running sidecars (if any)
+    if sidecars.is_empty() {
+        eprintln!("[dev] no running sidecars — binary cached for next `kap up`");
+    } else {
+        deploy_to_sidecars(&cache_path, &sidecars);
     }
-
-    // Clean up temp binary
-    let _ = std::fs::remove_file(&tmp_binary);
 
     // Restart remote daemon if running (uses the newly installed host binary)
     let restarted_remote = restart_remote_daemon();
 
     eprintln!();
-    eprintln!("  ✓ Pushed to {} sidecar(s)", sidecars.len());
+    if !sidecars.is_empty() {
+        eprintln!("  ✓ Pushed to {} sidecar(s)", sidecars.len());
+    }
+    eprintln!("  ✓ Cached at {}", cache_path.display());
     if restarted_remote {
         eprintln!("  ✓ Restarted remote daemon");
     }
@@ -112,6 +107,29 @@ pub fn push() -> Result<()> {
     eprintln!("  ⚠ Do NOT use kap up --reset (it will pull the");
     eprintln!("    published image and overwrite the dev binary)");
     Ok(())
+}
+
+/// Deploy a cached Linux binary to the given sidecar containers.
+pub fn deploy_to_sidecars(binary_path: &std::path::Path, sidecars: &[String]) {
+    for sidecar in sidecars {
+        eprintln!("[dev] deploying to {sidecar}...");
+        let status = Command::new("docker")
+            .args([
+                "cp",
+                binary_path.to_str().unwrap(),
+                &format!("{sidecar}:/usr/local/bin/kap"),
+            ])
+            .status();
+        if status.map(|s| !s.success()).unwrap_or(true) {
+            eprintln!("[dev] warning: failed to copy binary to {sidecar}");
+            continue;
+        }
+
+        let status = Command::new("docker").args(["restart", sidecar]).status();
+        if status.map(|s| !s.success()).unwrap_or(true) {
+            eprintln!("[dev] warning: failed to restart {sidecar}");
+        }
+    }
 }
 
 /// Restart the remote daemon if it's running. Returns true if restarted.
