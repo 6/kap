@@ -236,9 +236,12 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
         lines.extend_from_slice(&[
             "",
             "# SSH commit signing (override host gpg.ssh.program that doesn't exist in container)",
-            "git config --global gpg.ssh.program /usr/bin/ssh-keygen",
+            "# Use XDG git config to avoid failing on readonly bind-mounted ~/.gitconfig",
+            "GIT_XDG=\"${XDG_CONFIG_HOME:-$HOME/.config}/git/config\"",
+            "mkdir -p \"$(dirname \"$GIT_XDG\")\"",
+            "git config --file \"$GIT_XDG\" gpg.ssh.program /usr/bin/ssh-keygen",
             "KEY=$(git config --global user.signingkey 2>/dev/null || true)",
-            "[ -n \"$KEY\" ] && echo \"$KEY\" > ~/.ssh-signing-key.pub && git config --global user.signingkey ~/.ssh-signing-key.pub || true",
+            "[ -n \"$KEY\" ] && echo \"$KEY\" > ~/.ssh-signing-key.pub && git config --file \"$GIT_XDG\" user.signingkey ~/.ssh-signing-key.pub || true",
         ]);
     }
 
