@@ -1739,6 +1739,36 @@ mod tests {
     }
 
     #[test]
+    fn generate_config_setup_roundtrips_through_toml() {
+        let setup = SetupOptions {
+            install_claude_code: true,
+            install_codex: false,
+            install_gh: true,
+            ssh_signing: true,
+        };
+        let config_str = generate_config(&setup);
+        let parsed: crate::config::Config = toml::from_str(&config_str).unwrap();
+        let s = parsed.setup.expect("setup section should be present");
+        assert!(s.claude_code);
+        assert!(!s.codex);
+        assert!(s.gh);
+        assert!(s.ssh_signing);
+    }
+
+    #[test]
+    fn generate_config_no_setup_roundtrips_through_toml() {
+        let setup = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            install_gh: false,
+            ssh_signing: false,
+        };
+        let config_str = generate_config(&setup);
+        let parsed: crate::config::Config = toml::from_str(&config_str).unwrap();
+        assert!(parsed.setup.is_none());
+    }
+
+    #[test]
     fn devcontainer_json_always_has_remote_env_path() {
         let setup = SetupOptions {
             install_claude_code: false,
