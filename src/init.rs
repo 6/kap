@@ -434,8 +434,11 @@ fn generate_post_start_command(options: &SetupOptions) -> serde_json::Value {
         obj.insert(
             "claude-code".to_string(),
             serde_json::Value::String(
-                "command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash"
-                    .to_string(),
+                concat!(
+                    "command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash; ",
+                    "[ -f ~/.claude.json ] || echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json",
+                )
+                .to_string(),
             ),
         );
     }
@@ -1695,12 +1698,9 @@ mod tests {
         let cmd = generate_post_start_command(&opts);
         let obj = cmd.as_object().unwrap();
         assert_eq!(obj.len(), 1);
-        assert!(
-            obj["claude-code"]
-                .as_str()
-                .unwrap()
-                .contains("claude.ai/install.sh")
-        );
+        let claude_cmd = obj["claude-code"].as_str().unwrap();
+        assert!(claude_cmd.contains("claude.ai/install.sh"));
+        assert!(claude_cmd.contains("hasCompletedOnboarding"));
     }
 
     #[test]
