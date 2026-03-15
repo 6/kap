@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.kap.yml";
+pub const POST_START_SCRIPT: &str = ".kap-post-start.sh";
 
 /// Parse JSONC (JSON with trailing commas and // comments) into serde_json::Value.
 /// devcontainer.json commonly uses JSONC syntax.
@@ -428,61 +429,15 @@ fn has_kap_sidecar_init(value: &serde_json::Value) -> bool {
     }
 }
 
-fn generate_post_start_command(options: &SetupOptions) -> serde_json::Value {
+fn generate_post_start_command() -> serde_json::Value {
     let mut obj = serde_json::Map::new();
-    if options.install_claude_code {
-        obj.insert(
-            "claude-code".to_string(),
-            serde_json::Value::String(
-                concat!(
-                    "command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash; ",
-                    "[ -f ~/.claude.json ] || echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json",
-                )
-                .to_string(),
-            ),
-        );
-    }
-    if options.install_codex {
-        obj.insert(
-            "codex".to_string(),
-            serde_json::Value::String(
-                "command -v codex >/dev/null 2>&1 || { command -v npm >/dev/null 2>&1 && npm install -g @openai/codex || true; }"
-                    .to_string(),
-            ),
-        );
-    }
-    if options.install_gh {
-        obj.insert(
-            "gh".to_string(),
-            serde_json::Value::String(
-                concat!(
-                    "command -v gh >/dev/null 2>&1 || { ",
-                    "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg ",
-                    "| sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null ",
-                    "&& echo \"deb [arch=$(dpkg --print-architecture) ",
-                    "signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] ",
-                    "https://cli.github.com/packages stable main\" ",
-                    "| sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null ",
-                    "&& sudo apt-get update -qq && sudo apt-get install -y gh; }",
-                )
-                .to_string(),
-            ),
-        );
-    }
-    if options.ssh_signing {
-        obj.insert(
-            "ssh-signing".to_string(),
-            serde_json::Value::String(
-                concat!(
-                    "git config --global gpg.ssh.program /usr/bin/ssh-keygen; ",
-                    "KEY=$(git config --global user.signingkey 2>/dev/null || true); ",
-                    "[ -n \"$KEY\" ] && echo \"$KEY\" > ~/.ssh-signing-key.pub ",
-                    "&& git config --global user.signingkey ~/.ssh-signing-key.pub || true",
-                )
-                .to_string(),
-            ),
-        );
-    }
+    obj.insert(
+        "kap-setup".to_string(),
+        serde_json::Value::String(format!(
+            "/opt/kap/bin/{}",
+            crate::reload::POST_START_FILENAME
+        )),
+    );
     serde_json::Value::Object(obj)
 }
 
@@ -563,8 +518,12 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
         vec!["docker-compose.yml".to_string()]
     };
 
-    // Write kap.toml (auto-detects CLI tools like gh)
-    let config_content = generate_config();
+    // Optional setup: AI tools and SSH signing (prompt before writing kap.toml
+    // so [setup] section is included)
+    let setup = prompt_setup_options(yes);
+
+    // Write kap.toml (auto-detects CLI tools like gh, includes [setup])
+    let config_content = generate_config(&setup);
     write_file(&kap_toml_path, &config_content)?;
 
     // Detect CLI tools for .env
@@ -629,11 +588,8 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     } else {
         dc_obj["initializeCommand"] = serde_json::Value::String("kap sidecar-init".to_string());
     }
-
-    // Optional setup: AI tools and SSH signing
-    let setup = prompt_setup_options(yes);
     if setup.any_enabled() {
-        let kap_commands = generate_post_start_command(&setup);
+        let kap_commands = generate_post_start_command();
         let existing_is_object = dc_obj
             .get("postStartCommand")
             .is_some_and(|v| v.is_object());
@@ -724,7 +680,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
 
     let setup = prompt_setup_options(yes);
 
-    write_file(&devcontainer_dir.join("kap.toml"), &generate_config())?;
+    write_file(&devcontainer_dir.join("kap.toml"), &generate_config(&setup))?;
     write_file(
         &devcontainer_dir.join("docker-compose.yml"),
         &generate_app_compose(&project_name),
@@ -931,7 +887,7 @@ fn detect_cli_tools() -> Vec<&'static DetectedTool> {
         .collect()
 }
 
-fn generate_config() -> String {
+fn generate_config(setup: &SetupOptions) -> String {
     // Build allow list with category comments
     let mut allow_lines: Vec<String> = Vec::new();
     for (i, group) in DEFAULT_DOMAIN_GROUPS.iter().enumerate() {
@@ -1007,6 +963,30 @@ fn generate_config() -> String {
         )
     };
 
+    let setup_section = if setup.any_enabled() {
+        let mut lines = vec![
+            "\n# --- Container setup (tools installed on each start via postStartCommand) ---"
+                .to_string(),
+            "[setup]".to_string(),
+        ];
+        if setup.install_claude_code {
+            lines.push("claude_code = true".to_string());
+        }
+        if setup.install_codex {
+            lines.push("codex = true".to_string());
+        }
+        if setup.install_gh {
+            lines.push("gh = true".to_string());
+        }
+        if setup.ssh_signing {
+            lines.push("ssh_signing = true".to_string());
+        }
+        lines.push(String::new()); // trailing newline
+        lines.join("\n")
+    } else {
+        "\n# --- Container setup (uncomment to install tools on each start) ---\n# [setup]\n# claude_code = true\n# gh = true\n".to_string()
+    };
+
     format!(
         r#"# kap.toml — network and tool policy for this devcontainer
 
@@ -1031,7 +1011,7 @@ allow = [
 # [[mcp.servers]]
 # name = "github"
 # allow = ["get_pull_request", "list_issues"]
-{cli_section}"#
+{cli_section}{setup_section}"#
     )
 }
 
@@ -1051,7 +1031,7 @@ fn generate_app_compose(project_name: &str) -> String {
 
 fn generate_devcontainer_json(project_name: &str, setup: &SetupOptions) -> String {
     let post_start = if setup.any_enabled() {
-        let cmd = generate_post_start_command(setup);
+        let cmd = generate_post_start_command();
         format!(
             ",\n  \"postStartCommand\": {}",
             serde_json::to_string(&cmd).unwrap()
@@ -1111,7 +1091,12 @@ mod tests {
 
     #[test]
     fn generate_config_has_category_comments() {
-        let config = generate_config();
+        let config = generate_config(&SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            install_gh: false,
+            ssh_signing: false,
+        });
         assert!(config.contains("# GitHub"));
         assert!(config.contains("# AI providers"));
         assert!(config.contains("# APT"));
@@ -1688,80 +1673,13 @@ mod tests {
     }
 
     #[test]
-    fn post_start_command_claude_only() {
-        let opts = SetupOptions {
-            install_claude_code: true,
-            install_codex: false,
-            install_gh: false,
-            ssh_signing: false,
-        };
-        let cmd = generate_post_start_command(&opts);
+    fn post_start_command_references_script() {
+        let cmd = generate_post_start_command();
         let obj = cmd.as_object().unwrap();
         assert_eq!(obj.len(), 1);
-        let claude_cmd = obj["claude-code"].as_str().unwrap();
-        assert!(claude_cmd.contains("claude.ai/install.sh"));
-        assert!(claude_cmd.contains("hasCompletedOnboarding"));
-    }
-
-    #[test]
-    fn post_start_command_codex_only() {
-        let opts = SetupOptions {
-            install_claude_code: false,
-            install_codex: true,
-            install_gh: false,
-            ssh_signing: false,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let obj = cmd.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
-        assert!(obj["codex"].as_str().unwrap().contains("@openai/codex"));
-    }
-
-    #[test]
-    fn post_start_command_ssh_signing_only() {
-        let opts = SetupOptions {
-            install_claude_code: false,
-            install_codex: false,
-            install_gh: false,
-            ssh_signing: true,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let obj = cmd.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
-        assert!(obj["ssh-signing"].as_str().unwrap().contains("ssh-keygen"));
-    }
-
-    #[test]
-    fn post_start_command_gh_only() {
-        let opts = SetupOptions {
-            install_claude_code: false,
-            install_codex: false,
-            install_gh: true,
-            ssh_signing: false,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let obj = cmd.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
-        let gh_cmd = obj["gh"].as_str().unwrap();
-        assert!(gh_cmd.starts_with("command -v gh"));
-        assert!(gh_cmd.contains("github-cli"));
-    }
-
-    #[test]
-    fn post_start_command_all_enabled() {
-        let opts = SetupOptions {
-            install_claude_code: true,
-            install_codex: true,
-            install_gh: true,
-            ssh_signing: true,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let obj = cmd.as_object().unwrap();
-        assert_eq!(obj.len(), 4);
-        assert!(obj.contains_key("claude-code"));
-        assert!(obj.contains_key("codex"));
-        assert!(obj.contains_key("gh"));
-        assert!(obj.contains_key("ssh-signing"));
+        let path = obj["kap-setup"].as_str().unwrap();
+        assert!(path.contains("kap-post-start"));
+        assert!(path.starts_with("/opt/kap/bin/"));
     }
 
     #[test]
@@ -1775,7 +1693,7 @@ mod tests {
         let json_str = generate_devcontainer_json("test", &setup);
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let psc = json["postStartCommand"].as_object().unwrap();
-        assert!(psc.contains_key("claude-code"));
+        assert!(psc.contains_key("kap-setup"));
     }
 
     #[test]
@@ -1792,71 +1710,32 @@ mod tests {
     }
 
     #[test]
-    fn post_start_command_claude_is_idempotent() {
-        let opts = SetupOptions {
-            install_claude_code: true,
-            install_codex: false,
-            install_gh: false,
-            ssh_signing: false,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let s = cmd["claude-code"].as_str().unwrap();
-        // Must check before installing (idempotent guard)
-        assert!(s.starts_with("command -v claude"));
-    }
-
-    #[test]
-    fn post_start_command_codex_is_idempotent() {
-        let opts = SetupOptions {
-            install_claude_code: false,
-            install_codex: true,
-            install_gh: false,
-            ssh_signing: false,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let s = cmd["codex"].as_str().unwrap();
-        // Must check before installing (idempotent guard)
-        assert!(s.starts_with("command -v codex"));
-        // Must also check that npm exists
-        assert!(s.contains("command -v npm"));
-    }
-
-    #[test]
-    fn post_start_command_ssh_overrides_program_and_extracts_key() {
-        let opts = SetupOptions {
-            install_claude_code: false,
-            install_codex: false,
-            install_gh: false,
-            ssh_signing: true,
-        };
-        let cmd = generate_post_start_command(&opts);
-        let s = cmd["ssh-signing"].as_str().unwrap();
-        // Must override gpg.ssh.program to ssh-keygen
-        assert!(s.contains("gpg.ssh.program /usr/bin/ssh-keygen"));
-        // Must extract signing key to a file
-        assert!(s.contains("user.signingkey"));
-        assert!(s.contains(".ssh-signing-key.pub"));
-    }
-
-    #[test]
-    fn devcontainer_json_with_all_setup_has_all_commands() {
+    fn generate_config_includes_setup_section() {
         let setup = SetupOptions {
             install_claude_code: true,
-            install_codex: true,
+            install_codex: false,
             install_gh: true,
             ssh_signing: true,
         };
-        let json_str = generate_devcontainer_json("myproject", &setup);
-        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let psc = json["postStartCommand"].as_object().unwrap();
-        assert_eq!(psc.len(), 4);
-        assert!(psc.contains_key("claude-code"));
-        assert!(psc.contains_key("codex"));
-        assert!(psc.contains_key("gh"));
-        assert!(psc.contains_key("ssh-signing"));
-        // Other fields should still be present
-        assert_eq!(json["name"], "myproject");
-        assert_eq!(json["initializeCommand"], "kap sidecar-init");
+        let config = generate_config(&setup);
+        assert!(config.contains("[setup]"));
+        assert!(config.contains("claude_code = true"));
+        assert!(config.contains("gh = true"));
+        assert!(config.contains("ssh_signing = true"));
+        assert!(!config.contains("codex = true"));
+    }
+
+    #[test]
+    fn generate_config_without_setup_has_commented_section() {
+        let setup = SetupOptions {
+            install_claude_code: false,
+            install_codex: false,
+            install_gh: false,
+            ssh_signing: false,
+        };
+        let config = generate_config(&setup);
+        assert!(config.contains("# [setup]"));
+        assert!(!config.contains("\n[setup]"));
     }
 
     #[test]
@@ -2007,8 +1886,8 @@ mod tests {
         let psc = updated["postStartCommand"].as_object().unwrap();
         // Existing key preserved
         assert_eq!(psc["my-setup"], "echo custom");
-        // Kap keys merged in
-        assert!(psc.contains_key("claude-code"));
+        // Kap key merged in
+        assert!(psc.contains_key("kap-setup"));
 
         fs::remove_dir_all(&dir).unwrap();
     }

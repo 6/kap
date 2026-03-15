@@ -13,6 +13,19 @@ pub struct Config {
     pub mcp: Option<McpConfig>,
     pub compose: Option<ComposeConfig>,
     pub cli: Option<CliConfig>,
+    pub setup: Option<SetupConfig>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SetupConfig {
+    #[serde(default)]
+    pub claude_code: bool,
+    #[serde(default)]
+    pub codex: bool,
+    #[serde(default)]
+    pub gh: bool,
+    #[serde(default)]
+    pub ssh_signing: bool,
 }
 
 fn default_true() -> bool {

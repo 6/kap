@@ -291,10 +291,13 @@ async fn main() -> anyhow::Result<()> {
             let shared_cli = reload::new_shared(reload::CliTools::from_config(&cfg));
             let shared_mcp = reload::new_shared(reload::McpFilters::from_config(&cfg));
 
-            // Write CLI shim scripts to shared volume
+            // Write CLI shim scripts and post-start script to shared volume
             let shim_dir = std::path::PathBuf::from("/opt/kap/bin");
             if let Err(e) = reload::write_shims(&cfg, &shim_dir) {
                 eprintln!("[sidecar] warning: could not write shims: {e}");
+            }
+            if let Err(e) = reload::write_post_start_script(&cfg, &shim_dir) {
+                eprintln!("[sidecar] warning: could not write post-start script: {e}");
             }
 
             let proxy_fut = proxy::run(cfg.clone(), observe, shared_allowlist.clone());
