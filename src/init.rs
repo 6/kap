@@ -249,6 +249,7 @@ pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     let entries = [
         format!(".devcontainer/{OVERLAY_FILENAME}"),
         ".devcontainer/.env".to_string(),
+        format!(".devcontainer/{}", crate::reload::POST_START_FILENAME),
     ];
 
     let existing = if gitignore_path.exists() {
@@ -438,7 +439,7 @@ fn generate_post_start_command() -> serde_json::Value {
     obj.insert(
         "kap-setup".to_string(),
         serde_json::Value::String(format!(
-            "/opt/kap/bin/{}",
+            ".devcontainer/{}",
             crate::reload::POST_START_FILENAME
         )),
     );
@@ -1687,7 +1688,7 @@ mod tests {
         assert_eq!(obj.len(), 1);
         let path = obj["kap-setup"].as_str().unwrap();
         assert!(path.contains("kap-post-start"));
-        assert!(path.starts_with("/opt/kap/bin/"));
+        assert!(path.starts_with(".devcontainer/"));
     }
 
     #[test]
