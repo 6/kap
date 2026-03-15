@@ -8,6 +8,9 @@ pub struct Config {
     /// Forward the host SSH agent into the container (default: true).
     #[serde(default = "default_true")]
     pub ssh_agent: bool,
+    /// Override gpg.ssh.program in the container for commit signing.
+    #[serde(default)]
+    pub ssh_signing: bool,
     #[serde(default)]
     pub proxy: ProxyConfig,
     pub mcp: Option<McpConfig>,
@@ -24,8 +27,6 @@ pub struct SetupConfig {
     pub codex: bool,
     #[serde(default)]
     pub gh: bool,
-    #[serde(default)]
-    pub ssh_signing: bool,
 }
 
 fn default_true() -> bool {

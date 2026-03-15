@@ -291,6 +291,10 @@ impl SetupOptions {
     fn any_enabled(&self) -> bool {
         self.install_claude_code || self.install_codex || self.install_gh || self.ssh_signing
     }
+
+    fn any_setup_enabled(&self) -> bool {
+        self.install_claude_code || self.install_codex || self.install_gh
+    }
 }
 
 /// Check if the host uses a custom gpg.ssh.program that won't exist in the container
@@ -963,7 +967,7 @@ fn generate_config(setup: &SetupOptions) -> String {
         )
     };
 
-    let setup_section = if setup.any_enabled() {
+    let setup_section = if setup.any_setup_enabled() {
         let mut lines = vec![
             "\n# --- Container setup (tools installed on each start via postStartCommand) ---"
                 .to_string(),
@@ -978,13 +982,16 @@ fn generate_config(setup: &SetupOptions) -> String {
         if setup.install_gh {
             lines.push("gh = true".to_string());
         }
-        if setup.ssh_signing {
-            lines.push("ssh_signing = true".to_string());
-        }
         lines.push(String::new()); // trailing newline
         lines.join("\n")
     } else {
         "\n# --- Container setup (uncomment to install tools on each start) ---\n# [setup]\n# claude_code = true\n# gh = true\n".to_string()
+    };
+
+    let ssh_signing_line = if setup.ssh_signing {
+        "\n# Override gpg.ssh.program in the container for commit signing.\nssh_signing = true"
+    } else {
+        "\n# Override gpg.ssh.program in the container for commit signing.\n# ssh_signing = true"
     };
 
     format!(
@@ -994,6 +1001,7 @@ fn generate_config(setup: &SetupOptions) -> String {
 # On macOS, uses Docker Desktop's built-in SSH forwarding.
 # On Linux, bind-mounts $SSH_AUTH_SOCK directly.
 ssh_agent = true
+{ssh_signing_line}
 
 [proxy.network]
 # Domains the container can reach. Wildcards supported (*.example.com).
@@ -1721,8 +1729,10 @@ mod tests {
         assert!(config.contains("[setup]"));
         assert!(config.contains("claude_code = true"));
         assert!(config.contains("gh = true"));
-        assert!(config.contains("ssh_signing = true"));
         assert!(!config.contains("codex = true"));
+        // ssh_signing is top-level, not in [setup]
+        assert!(config.contains("ssh_signing = true"));
+        assert!(!config.contains("[setup]\nssh_signing"));
     }
 
     #[test]
@@ -1752,7 +1762,8 @@ mod tests {
         assert!(s.claude_code);
         assert!(!s.codex);
         assert!(s.gh);
-        assert!(s.ssh_signing);
+        // ssh_signing is top-level, not in [setup]
+        assert!(parsed.ssh_signing);
     }
 
     #[test]
