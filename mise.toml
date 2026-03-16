@@ -19,7 +19,7 @@ echo "[build] cached Linux binary at ~/.kap/dev/kap-linux"
 
 # Deploy to running sidecars
 DEPLOYED=0
-for sidecar in $(docker ps --format '{{.Names}}' | grep -E 'kap-kap|-kap-1$'); do
+for sidecar in $(docker ps | awk 'NR>1 {print $NF}' | grep -E 'kap-kap|-kap-1$'); do
   echo "[build] deploying to $sidecar..."
   docker cp ~/.kap/dev/kap-linux "$sidecar:/usr/local/bin/kap"
   docker restart "$sidecar"
