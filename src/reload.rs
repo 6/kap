@@ -186,7 +186,7 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
 
     // If nothing to do, remove stale script and return
     let setup_enabled = setup.is_some_and(|s| s.claude_code || s.codex || s.gh);
-    if !setup_enabled && !cfg.ssh_signing {
+    if !setup_enabled && !cfg.ssh_signing && !cfg.ssh_agent {
         let _ = std::fs::remove_file(&script_path);
         return Ok(());
     }
@@ -243,6 +243,23 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
                 "}",
             ]);
         }
+    }
+
+    if cfg.ssh_agent {
+        lines.extend_from_slice(&[
+            "",
+            "# Route SSH through the kap proxy (all hosts, not just git).",
+            "# Only write if no user-provided SSH config exists.",
+            "if [ ! -f ~/.ssh/config ]; then",
+            "  mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+            "  cat > ~/.ssh/config << 'SSHEOF'",
+            "Host *",
+            "    ProxyCommand /opt/kap/kap sidecar-connect-proxy %h %p",
+            "    StrictHostKeyChecking accept-new",
+            "SSHEOF",
+            "  chmod 600 ~/.ssh/config",
+            "fi",
+        ]);
     }
 
     if cfg.ssh_signing {
@@ -585,7 +602,7 @@ gh = true
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&script_path, "stale script").unwrap();
 
-        let cfg: Config = toml::from_str("").unwrap();
+        let cfg: Config = toml::from_str("ssh_agent = false").unwrap();
         write_post_start_script(&cfg, &dir).unwrap();
 
         assert!(!script_path.exists());
