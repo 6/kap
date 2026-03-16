@@ -232,9 +232,10 @@ mod tests {
     use std::collections::HashMap;
 
     async fn start_cli_proxy(tool_name: &str, allow: &[&str], deny: &[&str]) -> u16 {
+        // Bind first, then pass the listener to the spawned task to avoid
+        // a TOCTOU race where another test grabs the port between bind and re-bind.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
 
         let mut tools = HashMap::new();
         tools.insert(
@@ -256,9 +257,6 @@ mod tests {
         });
 
         tokio::spawn(async move {
-            let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
-                .await
-                .unwrap();
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     continue;
@@ -275,16 +273,10 @@ mod tests {
             }
         });
 
-        for _ in 0..100 {
-            if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
-                .await
-                .is_ok()
-            {
-                return port;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("cli proxy did not start");
+        // Listener is already bound, so the port is ready immediately.
+        // Brief yield to let the spawned task start accepting.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        port
     }
 
     async fn post(port: u16, tool: &str, args: &[&str]) -> (u16, String, String) {
