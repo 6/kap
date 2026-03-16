@@ -7,6 +7,8 @@
 use anyhow::{Context, Result, bail};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 
 pub fn run(host: &str, port: u16) -> Result<()> {
     let proxy_addr = proxy_addr_from_env()?;
@@ -57,7 +59,10 @@ pub fn run(host: &str, port: u16) -> Result<()> {
         Ok(())
     });
 
-    let mut stdout = std::io::stdout().lock();
+    // Write directly to fd 1 to avoid Stdout's internal buffering.
+    // SSH ProxyCommand needs data forwarded immediately — buffered
+    // stdout would stall the SSH handshake.
+    let mut stdout = unsafe { std::fs::File::from_raw_fd(1) };
     if !buffered.is_empty() {
         stdout.write_all(&buffered)?;
     }
