@@ -200,11 +200,19 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
     ];
 
     if let Some(setup) = setup {
+        // Check for the real binary, excluding /opt/kap/bin shims.
+        // The shims mask the real binary in `command -v`, so we filter PATH.
+        lines.extend_from_slice(&[
+            "",
+            "# PATH without kap shims (for install checks)",
+            "REAL_PATH=$(echo \"$PATH\" | tr ':' '\\n' | grep -v /opt/kap | tr '\\n' ':')",
+        ]);
+
         if setup.claude_code {
             lines.extend_from_slice(&[
                 "",
                 "# Install Claude Code",
-                "command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash",
+                "PATH=\"$REAL_PATH\" command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash",
                 "[ -f ~/.claude.json ] || echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json",
             ]);
         }
@@ -213,7 +221,7 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
             lines.extend_from_slice(&[
                 "",
                 "# Install Codex",
-                "command -v codex >/dev/null 2>&1 || { command -v npm >/dev/null 2>&1 && npm install -g @openai/codex || true; }",
+                "PATH=\"$REAL_PATH\" command -v codex >/dev/null 2>&1 || { command -v npm >/dev/null 2>&1 && npm install -g @openai/codex || true; }",
             ]);
         }
 
@@ -221,7 +229,7 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
             lines.extend_from_slice(&[
                 "",
                 "# Install GitHub CLI",
-                "command -v gh >/dev/null 2>&1 || {",
+                "PATH=\"$REAL_PATH\" command -v gh >/dev/null 2>&1 || {",
                 "  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\",
                 "    | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null",
                 "  echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" \\",
