@@ -42,6 +42,9 @@ pub fn run(host: &str, port: u16) -> Result<()> {
         }
     }
 
+    // Flush any data the BufReader already consumed past the headers
+    // (e.g. SSH banner that arrived with the HTTP response).
+    let buffered = reader.buffer().to_vec();
     let mut stream = reader.into_inner();
 
     // Bridge stdin/stdout <-> proxy socket
@@ -55,6 +58,9 @@ pub fn run(host: &str, port: u16) -> Result<()> {
     });
 
     let mut stdout = std::io::stdout().lock();
+    if !buffered.is_empty() {
+        stdout.write_all(&buffered)?;
+    }
     std::io::copy(&mut stream, &mut stdout)?;
 
     t1.join()
