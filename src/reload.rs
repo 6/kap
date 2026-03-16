@@ -332,7 +332,10 @@ pub const GITCONFIG_FILENAME: &str = "gitconfig";
 /// from inside the app container (e.g. `user.signingkey` file path).
 pub fn write_gitconfig(cfg: &Config, shim_dir: &Path) -> anyhow::Result<()> {
     // Write to /opt/kap/gitconfig (volume root), not /opt/kap/bin/gitconfig
-    let path = shim_dir.parent().unwrap_or(shim_dir).join(GITCONFIG_FILENAME);
+    let path = shim_dir
+        .parent()
+        .unwrap_or(shim_dir)
+        .join(GITCONFIG_FILENAME);
     let content = if cfg.ssh_signing {
         // Override gpg.ssh.program (the host's macOS binary doesn't exist in Linux).
         // ~/.gitconfig-kap is written by the post-start script with user.signingkey.
