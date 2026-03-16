@@ -141,6 +141,12 @@ pub fn generate_overlay(
     } else {
         ""
     };
+    // The sidecar writes /opt/kap/gitconfig as a wrapper that [include]s
+    // ~/.gitconfig and overrides settings (e.g. gpg.ssh.program) that don't
+    // work inside the container. Setting this in the compose environment
+    // ensures it's available in ALL execution contexts (interactive shells,
+    // devcontainer exec, scripts).
+    let git_config_env = "\n      GIT_CONFIG_GLOBAL: /opt/kap/gitconfig";
     let global_config_volume = if global_config {
         "\n      - ${{HOME}}/.kap/kap.toml:/etc/kap/global.toml:ro"
     } else {
@@ -165,7 +171,7 @@ services:
       http_proxy: http://{sidecar_ip}:3128
       https_proxy: http://{sidecar_ip}:3128
       NO_PROXY: localhost,127.0.0.1
-      no_proxy: localhost,127.0.0.1{ssh_env}
+      no_proxy: localhost,127.0.0.1{ssh_env}{git_config_env}
     # DNS goes through kap's filtered forwarder (only resolves allowed domains)
     dns:
       - {sidecar_ip}

@@ -295,6 +295,9 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = reload::write_post_start_script(&cfg, &shim_dir) {
                 eprintln!("[sidecar] warning: could not write post-start script: {e}");
             }
+            if let Err(e) = reload::write_gitconfig(&cfg, &shim_dir) {
+                eprintln!("[sidecar] warning: could not write gitconfig: {e}");
+            }
 
             let proxy_fut = proxy::run(cfg.clone(), observe, shared_allowlist.clone());
             let dns_listen = cfg.proxy.dns_listen.clone();

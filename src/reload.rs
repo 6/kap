@@ -159,6 +159,9 @@ pub async fn watch_config(
                 if let Err(e) = write_post_start_script(&cfg, &shim_dir) {
                     eprintln!("[sidecar] failed to update post-start script: {e}");
                 }
+                if let Err(e) = write_gitconfig(&cfg, &shim_dir) {
+                    eprintln!("[sidecar] failed to update gitconfig: {e}");
+                }
 
                 eprintln!("[sidecar] config reloaded");
             }
@@ -186,7 +189,7 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
 
     // If nothing to do, remove stale script and return
     let setup_enabled = setup.is_some_and(|s| s.claude_code || s.codex || s.gh);
-    if !setup_enabled && !cfg.ssh_signing && !cfg.ssh_agent {
+    if !setup_enabled && !cfg.ssh_agent {
         let _ = std::fs::remove_file(&script_path);
         return Ok(());
     }
@@ -270,13 +273,24 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
     if cfg.ssh_signing {
         lines.extend_from_slice(&[
             "",
-            "# SSH commit signing (override host gpg.ssh.program that doesn't exist in container)",
-            "# Use XDG git config to avoid failing on readonly bind-mounted ~/.gitconfig",
-            "GIT_XDG=\"${XDG_CONFIG_HOME:-$HOME/.config}/git/config\"",
-            "mkdir -p \"$(dirname \"$GIT_XDG\")\"",
-            "git config --file \"$GIT_XDG\" gpg.ssh.program /usr/bin/ssh-keygen",
-            "KEY=$(git config --global user.signingkey 2>/dev/null || true)",
-            "[ -n \"$KEY\" ] && echo \"$KEY\" > ~/.ssh-signing-key.pub && git config --file \"$GIT_XDG\" user.signingkey ~/.ssh-signing-key.pub || true",
+            "# SSH commit signing: write signingkey to a file (ssh-keygen needs a path,",
+            "# not an inline key) and override it via ~/.gitconfig-kap. The sidecar writes",
+            "# the main wrapper (/opt/kap/gitconfig) with gpg.ssh.program override;",
+            "# GIT_CONFIG_GLOBAL is set by the compose overlay so it works in all contexts.",
+            "KEY=$(GIT_CONFIG_GLOBAL= git config --global user.signingkey 2>/dev/null || true)",
+            "if [ -n \"$KEY\" ]; then",
+            "  echo \"$KEY\" > ~/.ssh-signing-key.pub",
+            "  git config -f ~/.gitconfig-kap user.signingkey ~/.ssh-signing-key.pub",
+            "fi",
+        ]);
+    } else {
+        lines.extend_from_slice(&[
+            "",
+            "# Auto-disable commit signing if the configured program doesn't exist in the container",
+            "SIGN_PROG=$(GIT_CONFIG_GLOBAL= git config --global gpg.ssh.program 2>/dev/null || true)",
+            "if [ -n \"$SIGN_PROG\" ] && ! command -v \"$SIGN_PROG\" >/dev/null 2>&1; then",
+            "  git config -f ~/.gitconfig-kap commit.gpgsign false",
+            "fi",
         ]);
     }
 
@@ -301,6 +315,42 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
 }
 
 pub const POST_START_FILENAME: &str = "kap-post-start";
+pub const GITCONFIG_FILENAME: &str = "gitconfig";
+
+/// Write `/opt/kap/gitconfig` — a git config wrapper that includes the user's
+/// `~/.gitconfig` and overrides settings that don't work inside the container.
+///
+/// The compose overlay sets `GIT_CONFIG_GLOBAL=/opt/kap/gitconfig` on the app
+/// container, so this file is used as the global git config in all contexts
+/// (interactive shells, `devcontainer exec`, scripts).
+///
+/// When `ssh_signing = true`: overrides `gpg.ssh.program` to `/usr/bin/ssh-keygen`.
+/// When `ssh_signing = false`: just a passthrough (post-start script may add
+/// `[commit] gpgsign = false` to `~/.gitconfig-kap` if the signing program is missing).
+///
+/// Both variants include `~/.gitconfig-kap` for overrides that need to be written
+/// from inside the app container (e.g. `user.signingkey` file path).
+pub fn write_gitconfig(cfg: &Config, shim_dir: &Path) -> anyhow::Result<()> {
+    // Write to /opt/kap/gitconfig (volume root), not /opt/kap/bin/gitconfig
+    let path = shim_dir.parent().unwrap_or(shim_dir).join(GITCONFIG_FILENAME);
+    let content = if cfg.ssh_signing {
+        // Override gpg.ssh.program (the host's macOS binary doesn't exist in Linux).
+        // ~/.gitconfig-kap is written by the post-start script with user.signingkey.
+        "[include]\n    path = ~/.gitconfig\n[include]\n    path = ~/.gitconfig-kap\n[gpg \"ssh\"]\n    program = /usr/bin/ssh-keygen\n"
+    } else {
+        // Passthrough: ~/.gitconfig-kap may disable signing if the program is missing.
+        "[include]\n    path = ~/.gitconfig\n[include]\n    path = ~/.gitconfig-kap\n"
+    };
+    let needs_write = std::fs::read_to_string(&path)
+        .map(|existing| existing != content)
+        .unwrap_or(true);
+    if needs_write {
+        std::fs::create_dir_all(shim_dir)?;
+        std::fs::write(&path, content)?;
+        eprintln!("[sidecar] wrote {GITCONFIG_FILENAME}");
+    }
+    Ok(())
+}
 
 /// Write shim scripts for all configured CLI tools to the shim directory.
 /// Removes stale shims for tools no longer in the config.
@@ -594,8 +644,8 @@ gh = true
         assert!(script.contains("claude.ai/install.sh"));
         assert!(script.contains("@openai/codex"));
         assert!(script.contains("github-cli"));
-        assert!(script.contains("gpg.ssh.program /usr/bin/ssh-keygen"));
         assert!(script.contains(".ssh-signing-key.pub"));
+        assert!(script.contains("git config -f ~/.gitconfig-kap user.signingkey"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -638,6 +688,72 @@ claude_code = true
             .unwrap();
 
         assert_eq!(mtime1, mtime2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn post_start_script_ssh_signing_override() {
+        let dir = tempdir("post-start-signing-override");
+        let toml = "ssh_signing = true";
+        let cfg: Config = toml::from_str(toml).unwrap();
+        write_post_start_script(&cfg, &dir).unwrap();
+
+        let script = std::fs::read_to_string(dir.join(POST_START_FILENAME)).unwrap();
+        assert!(script.contains(".ssh-signing-key.pub"));
+        assert!(script.contains("git config -f ~/.gitconfig-kap user.signingkey"));
+        // Should NOT contain the auto-disable branch
+        assert!(!script.contains("gpgsign = false"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn post_start_script_ssh_signing_auto_disable() {
+        let dir = tempdir("post-start-auto-disable");
+        let toml = "ssh_signing = false";
+        let cfg: Config = toml::from_str(toml).unwrap();
+        write_post_start_script(&cfg, &dir).unwrap();
+
+        let script = std::fs::read_to_string(dir.join(POST_START_FILENAME)).unwrap();
+        assert!(script.contains("SIGN_PROG="));
+        assert!(script.contains("git config -f ~/.gitconfig-kap commit.gpgsign false"));
+        assert!(!script.contains("ssh-keygen"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_gitconfig_ssh_signing_true() {
+        let dir = tempdir("gitconfig-signing");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        let cfg: Config = toml::from_str("ssh_signing = true").unwrap();
+        write_gitconfig(&cfg, &bin).unwrap();
+
+        // Written to parent of shim_dir (volume root)
+        let content = std::fs::read_to_string(dir.join(GITCONFIG_FILENAME)).unwrap();
+        assert!(content.contains("[include]\n    path = ~/.gitconfig"));
+        assert!(content.contains("[include]\n    path = ~/.gitconfig-kap"));
+        assert!(content.contains("program = /usr/bin/ssh-keygen"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_gitconfig_ssh_signing_false() {
+        let dir = tempdir("gitconfig-passthrough");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        let cfg: Config = toml::from_str("ssh_signing = false").unwrap();
+        write_gitconfig(&cfg, &bin).unwrap();
+
+        let content = std::fs::read_to_string(dir.join(GITCONFIG_FILENAME)).unwrap();
+        assert!(content.contains("[include]\n    path = ~/.gitconfig"));
+        assert!(content.contains("[include]\n    path = ~/.gitconfig-kap"));
+        assert!(!content.contains("ssh-keygen"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
