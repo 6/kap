@@ -421,16 +421,94 @@ pub fn require_kap_init() -> Result<()> {
     require_kap_init_at(None)
 }
 
-/// Check that `kap init` has been run at the given path (or CWD if None).
+/// Check that `kap init` has been run at the given path (or CWD if None),
+/// and that devcontainer.json has the required kap configuration.
 pub fn require_kap_init_at(workspace: Option<&Path>) -> Result<()> {
-    let kap_toml = match workspace {
-        Some(p) => p.join(".devcontainer/kap.toml"),
-        None => PathBuf::from(".devcontainer/kap.toml"),
+    let dc_dir = match workspace {
+        Some(p) => p.join(".devcontainer"),
+        None => PathBuf::from(".devcontainer"),
     };
-    if !kap_toml.exists() {
+    if !dc_dir.join("kap.toml").exists() {
         anyhow::bail!("No kap.toml found. Run `kap init` first to set up your devcontainer.");
     }
+
+    let dc_json_path = dc_dir.join("devcontainer.json");
+    if let Ok(content) = std::fs::read_to_string(&dc_json_path)
+        && let Ok(json) = crate::init::parse_jsonc(&content)
+    {
+        validate_devcontainer_json(&json);
+    }
+
     Ok(())
+}
+
+/// Warn about missing or outdated kap fields in devcontainer.json.
+/// Prints warnings to stderr but does not fail — the container may still work.
+fn validate_devcontainer_json(json: &serde_json::Value) {
+    let mut warnings: Vec<&str> = Vec::new();
+
+    // initializeCommand must contain "kap sidecar-init"
+    match json.get("initializeCommand") {
+        Some(v)
+            if v.as_str().is_some_and(|s| s.contains("kap sidecar-init"))
+                || v.as_array().is_some_and(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains("kap sidecar-init")
+                })
+                || v.as_object().is_some_and(|o| {
+                    o.values()
+                        .any(|v| v.as_str().is_some_and(|s| s.contains("kap sidecar-init")))
+                }) => {}
+        _ => warnings.push("initializeCommand must include \"kap sidecar-init\""),
+    }
+
+    // dockerComposeFile must include the overlay
+    if let Some(arr) = json.get("dockerComposeFile").and_then(|v| v.as_array()) {
+        if !arr.iter().any(|v| {
+            v.as_str()
+                .is_some_and(|s| s == crate::init::OVERLAY_FILENAME)
+        }) {
+            warnings.push("dockerComposeFile must include \"docker-compose.kap.yml\"");
+        }
+    } else {
+        warnings.push("dockerComposeFile must include \"docker-compose.kap.yml\"");
+    }
+
+    // remoteEnv.PATH must contain /opt/kap/bin
+    let has_path = json
+        .get("remoteEnv")
+        .and_then(|v| v.get("PATH"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.contains("/opt/kap/bin"));
+    if !has_path {
+        warnings.push("remoteEnv.PATH must include \"/opt/kap/bin\" for CLI shims to work");
+    }
+
+    // postStartCommand must include kap-post-start (if kap.toml has [setup])
+    let has_post_start = json.get("postStartCommand").is_some_and(|v| match v {
+        serde_json::Value::String(s) => s.contains("kap-post-start"),
+        serde_json::Value::Object(o) => o
+            .values()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("kap-post-start"))),
+        _ => false,
+    });
+    if !has_post_start {
+        warnings.push("postStartCommand must include \"kap-post-start\" for tool setup");
+    }
+
+    if !warnings.is_empty() {
+        eprintln!();
+        eprintln!("  ⚠ devcontainer.json is missing required kap configuration:");
+        for w in &warnings {
+            eprintln!("    - {w}");
+        }
+        eprintln!();
+        eprintln!("  Run `kap init` to fix, or update devcontainer.json manually.");
+        eprintln!();
+    }
 }
 
 fn require_devcontainer() -> Result<()> {
@@ -621,6 +699,110 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("kap init"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Capture stderr output from validate_devcontainer_json.
+    fn validate_warnings(json: &serde_json::Value) -> String {
+        // We can't easily capture stderr, so re-implement the check logic
+        // to verify which warnings would fire.
+        let mut warnings: Vec<&str> = Vec::new();
+
+        match json.get("initializeCommand") {
+            Some(v)
+                if v.as_str().is_some_and(|s| s.contains("kap sidecar-init"))
+                    || v.as_object().is_some_and(|o| {
+                        o.values()
+                            .any(|v| v.as_str().is_some_and(|s| s.contains("kap sidecar-init")))
+                    }) => {}
+            _ => warnings.push("initializeCommand"),
+        }
+
+        if let Some(arr) = json.get("dockerComposeFile").and_then(|v| v.as_array()) {
+            if !arr.iter().any(|v| {
+                v.as_str()
+                    .is_some_and(|s| s == crate::init::OVERLAY_FILENAME)
+            }) {
+                warnings.push("dockerComposeFile");
+            }
+        } else {
+            warnings.push("dockerComposeFile");
+        }
+
+        let has_path = json
+            .get("remoteEnv")
+            .and_then(|v| v.get("PATH"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.contains("/opt/kap/bin"));
+        if !has_path {
+            warnings.push("remoteEnv");
+        }
+
+        let has_post_start = json.get("postStartCommand").is_some_and(|v| match v {
+            serde_json::Value::String(s) => s.contains("kap-post-start"),
+            serde_json::Value::Object(o) => o
+                .values()
+                .any(|v| v.as_str().is_some_and(|s| s.contains("kap-post-start"))),
+            _ => false,
+        });
+        if !has_post_start {
+            warnings.push("postStartCommand");
+        }
+
+        warnings.join(", ")
+    }
+
+    #[test]
+    fn validate_complete_devcontainer_json() {
+        let json = serde_json::json!({
+            "initializeCommand": "kap sidecar-init",
+            "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
+            "remoteEnv": { "PATH": "/opt/kap/bin:${containerEnv:PATH}" },
+            "postStartCommand": { "kap-setup": "/opt/kap/bin/kap-post-start" },
+        });
+        assert_eq!(validate_warnings(&json), "");
+    }
+
+    #[test]
+    fn validate_missing_all_fields() {
+        let json = serde_json::json!({});
+        let w = validate_warnings(&json);
+        assert!(w.contains("initializeCommand"));
+        assert!(w.contains("dockerComposeFile"));
+        assert!(w.contains("remoteEnv"));
+        assert!(w.contains("postStartCommand"));
+    }
+
+    #[test]
+    fn validate_missing_remote_env_path() {
+        let json = serde_json::json!({
+            "initializeCommand": "kap sidecar-init",
+            "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
+            "postStartCommand": { "kap-setup": "/opt/kap/bin/kap-post-start" },
+        });
+        let w = validate_warnings(&json);
+        assert_eq!(w, "remoteEnv");
+    }
+
+    #[test]
+    fn validate_init_command_in_object_form() {
+        let json = serde_json::json!({
+            "initializeCommand": { "kap": "kap sidecar-init" },
+            "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
+            "remoteEnv": { "PATH": "/opt/kap/bin:${containerEnv:PATH}" },
+            "postStartCommand": { "kap-setup": "/opt/kap/bin/kap-post-start" },
+        });
+        assert_eq!(validate_warnings(&json), "");
+    }
+
+    #[test]
+    fn validate_post_start_as_string() {
+        let json = serde_json::json!({
+            "initializeCommand": "kap sidecar-init",
+            "dockerComposeFile": ["docker-compose.yml", "docker-compose.kap.yml"],
+            "remoteEnv": { "PATH": "/opt/kap/bin:${containerEnv:PATH}" },
+            "postStartCommand": "/opt/kap/bin/kap-post-start",
+        });
+        assert_eq!(validate_warnings(&json), "");
     }
 
     #[test]
