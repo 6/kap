@@ -218,7 +218,12 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
                 "",
                 "# Install Claude Code",
                 "PATH=\"$REAL_PATH\" command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash",
-                "[ -f ~/.claude.json ] || echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json",
+                "# Ensure onboarding is skipped (installer creates the file without this flag)",
+                "if command -v python3 >/dev/null 2>&1; then",
+                "  python3 -c \"import json,pathlib; p=pathlib.Path.home()/'.claude.json'; d=json.loads(p.read_text()) if p.exists() else {}; d['hasCompletedOnboarding']=True; p.write_text(json.dumps(d))\"",
+                "elif [ ! -f ~/.claude.json ]; then",
+                "  echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json",
+                "fi",
             ]);
         }
 
