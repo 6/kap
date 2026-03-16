@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use kap::{
-    check, cli, container, dev, init, init_env, mcp, mcp_cmd, proxy, reload, remote, status,
-    upgrade,
+    check, cli, connect_proxy, container, dev, init, init_env, mcp, mcp_cmd, proxy, reload, remote,
+    status, upgrade,
 };
 
 #[derive(Parser)]
@@ -137,6 +137,14 @@ enum Command {
         #[arg(short, long, default_value = ".")]
         project_dir: String,
     },
+    /// TCP-over-HTTP-CONNECT bridge for SSH ProxyCommand (runs in app container)
+    #[command(hide = true)]
+    SidecarConnectProxy {
+        /// Target host
+        host: String,
+        /// Target port
+        port: u16,
+    },
     /// Start the forward proxy (runs inside the sidecar)
     #[command(hide = true)]
     SidecarProxy {
@@ -221,6 +229,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::SidecarCliShim { tool, args } => cli::shim::run(&tool, &args).await,
+        Command::SidecarConnectProxy { host, port } => connect_proxy::run(&host, port),
         Command::Down { project, volumes } => container::down(project, None, volumes),
         Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::Init {

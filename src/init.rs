@@ -137,7 +137,8 @@ pub fn generate_overlay(
         format!("\n    volumes:\n{}", entries.join("\n"))
     };
     let ssh_env = if ssh_auth_sock.is_some() {
-        "\n      SSH_AUTH_SOCK: /ssh-agent"
+        "\n      SSH_AUTH_SOCK: /ssh-agent\
+         \n      GIT_SSH_COMMAND: ssh -o ProxyCommand='/opt/kap/kap sidecar-connect-proxy %h %p'"
     } else {
         ""
     };
@@ -1561,6 +1562,8 @@ mod tests {
         );
         assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
+        assert!(overlay.contains("GIT_SSH_COMMAND: ssh -o ProxyCommand="));
+        assert!(overlay.contains("sidecar-connect-proxy %h %p"));
     }
 
     #[test]
@@ -1569,6 +1572,7 @@ mod tests {
         let overlay = generate_overlay("app", &compose, "172.28.0", "test", None, false);
         assert!(!overlay.contains("ssh-agent"));
         assert!(!overlay.contains("SSH_AUTH_SOCK"));
+        assert!(!overlay.contains("GIT_SSH_COMMAND"));
     }
 
     #[test]
@@ -1585,6 +1589,7 @@ mod tests {
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
         assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
+        assert!(overlay.contains("GIT_SSH_COMMAND:"));
     }
 
     #[test]

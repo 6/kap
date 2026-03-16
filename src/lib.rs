@@ -7,6 +7,8 @@ pub mod check;
 #[doc(hidden)]
 pub mod cli;
 pub mod config;
+#[doc(hidden)]
+pub mod connect_proxy;
 pub mod container;
 #[doc(hidden)]
 pub mod dev;
