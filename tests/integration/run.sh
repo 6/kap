@@ -94,6 +94,9 @@ if run bash -c '
   git config user.name "CI Test"
   git config user.email "ci@test.local"
   git config user.signingkey /tmp/test-sign-key.pub
+  # Set up allowedSignersFile so --show-signature can verify
+  echo "ci@test.local $(cat /tmp/test-sign-key.pub)" > /tmp/allowed-signers
+  git config gpg.ssh.allowedSignersFile /tmp/allowed-signers
   git commit --allow-empty -m "test signed commit"
 ' 2>&1; then
   pass "signed commit succeeded"
