@@ -47,18 +47,23 @@ pub fn run(host: &str, port: u16) -> Result<()> {
     // Flush any data the BufReader already consumed past the headers
     // (e.g. SSH banner that arrived with the HTTP response).
     let buffered = reader.buffer().to_vec();
-    let mut stream = reader.into_inner();
+    let stream = reader.into_inner();
 
-    // Bridge stdin/stdout <-> proxy socket
-    let mut stream_clone = stream.try_clone().context("cloning socket")?;
+    // Bridge stdin → proxy using a separate fd (dup'd) so that
+    // the read side stays independent.
+    let stdin_fd = {
+        let raw = std::os::fd::AsRawFd::as_raw_fd(&stream);
+        let duped = unsafe { libc::dup(raw) };
+        if duped < 0 {
+            anyhow::bail!("dup() failed");
+        }
+        unsafe { std::fs::File::from_raw_fd(duped) }
+    };
 
-    let t1 = std::thread::spawn(move || -> Result<()> {
+    let t1 = std::thread::spawn(move || {
         let mut stdin = std::io::stdin().lock();
-        std::io::copy(&mut stdin, &mut stream_clone)?;
-        // Don't shutdown(Write) — it operates on the underlying socket
-        // and would signal EOF to the proxy, killing the tunnel before
-        // the server-to-client direction finishes.
-        Ok(())
+        let mut writer = stdin_fd;
+        let _ = std::io::copy(&mut stdin, &mut writer);
     });
 
     // Write directly to fd 1 to avoid Stdout's internal buffering.
@@ -68,10 +73,20 @@ pub fn run(host: &str, port: u16) -> Result<()> {
     if !buffered.is_empty() {
         stdout.write_all(&buffered)?;
     }
-    std::io::copy(&mut stream, &mut stdout)?;
+
+    // Manual copy loop: read from stream, write+flush to stdout.
+    // std::io::copy may not flush between reads, stalling SSH.
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = std::io::Read::read(&mut &stream, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        stdout.write_all(&buf[..n])?;
+    }
 
     t1.join()
-        .map_err(|_| anyhow::anyhow!("stdin thread panicked"))??;
+        .map_err(|_| anyhow::anyhow!("stdin thread panicked"))?;
     Ok(())
 }
 
