@@ -169,6 +169,9 @@ async fn handle_connect(
                                         if target.write_all(data).await.is_err() {
                                             return;
                                         }
+                                        if target.flush().await.is_err() {
+                                            return;
+                                        }
                                     }
                                     Err(_) => return,
                                 }
@@ -179,6 +182,9 @@ async fn handle_connect(
                                     Ok(0) => return,
                                     Ok(n) => {
                                         if upgraded.write_all(&target_buf[..n]).await.is_err() {
+                                            return;
+                                        }
+                                        if tokio::io::AsyncWriteExt::flush(&mut upgraded).await.is_err() {
                                             return;
                                         }
                                     }
