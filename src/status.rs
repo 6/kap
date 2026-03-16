@@ -217,7 +217,10 @@ pub fn run() -> Result<()> {
 
         // Check each tool's shim + credentials
         for tool in &cli.tools {
-            let shim_ok = exec_exit_code(&app, &["which", &tool.name]) == 0;
+            let shim_ok = exec_exit_code(
+                &app,
+                &["test", "-x", &format!("/opt/kap/bin/{}", tool.name)],
+            ) == 0;
             let mut missing_vars: Vec<&str> = Vec::new();
             for var in &tool.env {
                 if exec_exit_code(&sidecar, &["sh", "-c", &format!("test -n \"${var}\"")]) != 0 {
