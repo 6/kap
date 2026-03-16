@@ -157,6 +157,22 @@ allow = ["github.com", "*.github.com", "example.com"]
 
 [compose]
 image = "kap-test"
+
+[cli]
+[[cli.tools]]
+name = "curl"
+mode = "proxy"
+allow = ["*"]
+
+[[cli.tools]]
+name = "hostname"
+mode = "proxy"
+allow = ["*"]
+
+[[cli.tools]]
+name = "env"
+mode = "direct"
+env = ["TEST_SECRET"]
 TOML
 # Sidecar polls every 2s; bind-mount propagation on Docker Desktop can be slow
 if wait_for 15 run getent hosts example.com; then
@@ -174,18 +190,58 @@ else
   fail "example.com still resolves after removing from allowlist"
 fi
 
+# --- CLI proxy ---
+echo ""
+echo "--- CLI proxy ---"
+
+echo "[12] Shims created for configured tools"
+if run test -x /opt/kap/bin/curl && run test -x /opt/kap/bin/hostname && run test -x /opt/kap/bin/env; then
+  pass "shims exist for curl, hostname, env"
+else
+  fail "one or more shims missing"
+fi
+
+echo "[13] mode=proxy: hostname runs on sidecar"
+APP_HOSTNAME=$(run hostname 2>/dev/null || echo "")
+PROXY_HOSTNAME=$(run /opt/kap/bin/hostname 2>/dev/null || echo "")
+if [ -n "$PROXY_HOSTNAME" ] && [ "$PROXY_HOSTNAME" != "$APP_HOSTNAME" ]; then
+  pass "proxy hostname ($PROXY_HOSTNAME) differs from app ($APP_HOSTNAME)"
+else
+  fail "proxy hostname ($PROXY_HOSTNAME) same as app ($APP_HOSTNAME) or empty"
+fi
+
+echo "[14] mode=proxy: curl fetches through sidecar"
+# The sidecar has direct internet access (no proxy needed). curl via shim
+# runs on the sidecar, so it can reach github.com without going through
+# the domain proxy.
+if run /opt/kap/bin/curl -sf --max-time 10 -o /dev/null https://github.com 2>/dev/null; then
+  pass "curl via proxy mode reached github.com"
+else
+  fail "curl via proxy mode failed"
+fi
+
+echo "[15] mode=direct: env var passed from sidecar to app"
+# The sidecar has TEST_SECRET in its environment (from .env).
+# Direct mode returns it to the shim, which exec's the real `env` binary.
+DIRECT_OUTPUT=$(run /opt/kap/bin/env 2>/dev/null || echo "")
+if echo "$DIRECT_OUTPUT" | grep -q "TEST_SECRET=s3cret-from-sidecar"; then
+  pass "TEST_SECRET passed from sidecar to app via direct mode"
+else
+  fail "TEST_SECRET not found in direct mode output"
+fi
+
 # --- Post-start script ---
 echo ""
 echo "--- Post-start script ---"
 
-echo "[12] Post-start script exists and is executable"
+echo "[16] Post-start script exists and is executable"
 if run test -x /opt/kap/bin/kap-post-start; then
   pass "kap-post-start is executable"
 else
   fail "kap-post-start missing or not executable"
 fi
 
-echo "[13] Kap binary available on shared volume"
+echo "[17] Kap binary available on shared volume"
 if run test -x /opt/kap/kap; then
   pass "kap binary on shared volume"
 else
