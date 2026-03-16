@@ -138,34 +138,53 @@ async fn handle_connect(
                 let mut upgraded = TokioIo::new(upgraded);
                 match TcpStream::connect(&host).await {
                     Ok(mut target) => {
-                        // Read the first chunk from the client (the TLS ClientHello)
-                        let mut peek_buf = vec![0u8; 4096];
-                        match tokio::io::AsyncReadExt::read(&mut upgraded, &mut peek_buf).await {
-                            Ok(0) => return,
-                            Ok(n) => {
-                                let data = &peek_buf[..n];
-                                if let Some(sni_host) = sni::extract_sni(data)
-                                    && !sni::sni_matches_connect_domain(&sni_host, &connect_domain)
-                                {
-                                    eprintln!(
-                                        "[proxy] SNI mismatch: CONNECT domain={connect_domain}, SNI={sni_host}"
-                                    );
-                                    if !observe {
-                                        let entry = ProxyLogEntry::new(
-                                            &connect_domain,
-                                            "denied",
-                                            &format!("SNI mismatch: {sni_host}"),
-                                        );
-                                        let _ = logger.log(&entry).await;
-                                        return; // drop the connection
+                        // Race: read from client vs target. TLS (client-speaks-first)
+                        // sends a ClientHello we can check for SNI mismatch. Server-
+                        // speaks-first protocols (SSH) send a banner from the target
+                        // that we forward immediately, skipping SNI validation.
+                        let mut client_buf = vec![0u8; 4096];
+                        let mut target_buf = vec![0u8; 4096];
+                        tokio::select! {
+                            result = tokio::io::AsyncReadExt::read(&mut upgraded, &mut client_buf) => {
+                                match result {
+                                    Ok(0) => return,
+                                    Ok(n) => {
+                                        let data = &client_buf[..n];
+                                        if let Some(sni_host) = sni::extract_sni(data)
+                                            && !sni::sni_matches_connect_domain(&sni_host, &connect_domain)
+                                        {
+                                            eprintln!(
+                                                "[proxy] SNI mismatch: CONNECT domain={connect_domain}, SNI={sni_host}"
+                                            );
+                                            if !observe {
+                                                let entry = ProxyLogEntry::new(
+                                                    &connect_domain,
+                                                    "denied",
+                                                    &format!("SNI mismatch: {sni_host}"),
+                                                );
+                                                let _ = logger.log(&entry).await;
+                                                return;
+                                            }
+                                        }
+                                        if target.write_all(data).await.is_err() {
+                                            return;
+                                        }
                                     }
-                                }
-                                // Forward the buffered bytes to upstream
-                                if target.write_all(data).await.is_err() {
-                                    return;
+                                    Err(_) => return,
                                 }
                             }
-                            Err(_) => return,
+                            result = tokio::io::AsyncReadExt::read(&mut target, &mut target_buf) => {
+                                // Server spoke first (SSH, etc.) — forward to client
+                                match result {
+                                    Ok(0) => return,
+                                    Ok(n) => {
+                                        if upgraded.write_all(&target_buf[..n]).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                    Err(_) => return,
+                                }
+                            }
                         }
                         let _ = tokio::io::copy_bidirectional(&mut upgraded, &mut target).await;
                     }
@@ -624,6 +643,52 @@ mod tests {
         assert!(
             was_forwarded.is_ok(),
             "non-TLS tunnel data should be forwarded (no SNI to check)"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_speaks_first_forwarded() {
+        // SSH and similar protocols have the server send data first.
+        // The proxy should forward the server banner to the client without
+        // waiting for client data (which would deadlock).
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_port = upstream.local_addr().unwrap().port();
+        let upstream_addr = format!("127.0.0.1:{upstream_port}");
+
+        // Mock SSH server: send a banner immediately on connect
+        let banner = b"SSH-2.0-MockServer\r\n";
+        tokio::spawn(async move {
+            if let Ok((mut conn, _)) = upstream.accept().await {
+                conn.write_all(banner).await.ok();
+            }
+        });
+
+        let port = start_proxy(&["127.0.0.1"], &[], false).await;
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let connect_req =
+            format!("CONNECT {upstream_addr} HTTP/1.1\r\nHost: {upstream_addr}\r\n\r\n");
+        stream.write_all(connect_req.as_bytes()).await.unwrap();
+
+        // Read the 200 response
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("read timed out")
+            .unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+
+        // Without sending anything, we should receive the server's banner
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("server banner timed out — deadlock?")
+            .unwrap();
+        let received = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            received.contains("SSH-2.0-MockServer"),
+            "expected SSH banner, got: {received}"
         );
     }
 
