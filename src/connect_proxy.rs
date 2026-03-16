@@ -55,7 +55,9 @@ pub fn run(host: &str, port: u16) -> Result<()> {
     let t1 = std::thread::spawn(move || -> Result<()> {
         let mut stdin = std::io::stdin().lock();
         std::io::copy(&mut stdin, &mut stream_clone)?;
-        stream_clone.shutdown(std::net::Shutdown::Write).ok();
+        // Don't shutdown(Write) — it operates on the underlying socket
+        // and would signal EOF to the proxy, killing the tunnel before
+        // the server-to-client direction finishes.
         Ok(())
     });
 
