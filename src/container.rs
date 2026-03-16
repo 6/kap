@@ -111,12 +111,12 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
     // `kap dev push` needs a running sidecar but `kap up` starts with the
     // published image.
     let dev_binary = crate::dev::cached_binary_path();
-    if dev_binary.exists()
-        && let Some(sidecar) = find_sidecar()
-    {
-        eprintln!("[dev] deploying cached binary to sidecar...");
-        crate::dev::deploy_to_sidecars(&dev_binary, &[sidecar]);
-    }
+    let dev_deployed = dev_binary.exists()
+        && find_sidecar().is_some_and(|sidecar| {
+            eprintln!("[dev] deploying cached binary to sidecar...");
+            crate::dev::deploy_to_sidecars(&dev_binary, &[sidecar]);
+            true
+        });
 
     // Wait for the sidecar to become healthy before running status checks.
     // The sidecar writes CLI shims on startup; without this wait, `which <tool>`
@@ -133,6 +133,19 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    // When a dev binary was deployed, the sidecar generated a new post-start
+    // script. Re-run it in the app container so overrides (e.g. git signing
+    // key) match the deployed code, not the published image's older version.
+    if dev_deployed {
+        let post_start = format!("/opt/kap/bin/{}", crate::reload::POST_START_FILENAME);
+        let mut opts = ExecOptions::cwd(vec!["bash".into(), "-c".into(), post_start]);
+        opts.stdout = Some(Stdio::null());
+        opts.stderr = Some(Stdio::null());
+        if let Err(e) = exec_with(opts) {
+            eprintln!("[dev] warning: post-start re-run failed: {e}");
         }
     }
 
