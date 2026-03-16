@@ -39,3 +39,40 @@ jobs:
 
       - name: Test
         run: cargo test --release
+
+  integration:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Install kap
+        run: cargo install --path . --force
+
+      - name: Build sidecar image
+        run: docker build --target proxy -t kap-test -f .devcontainer/Dockerfile .
+
+      - name: Set up test environment
+        run: tests/integration/setup.sh
+
+      - name: Run integration tests
+        run: tests/integration/run.sh
+
+      - name: Container logs
+        if: failure()
+        run: |
+          DC_DIR=tests/integration/project/.devcontainer
+          docker compose --project-name kap-integration \
+            -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml \
+            logs --no-color
+
+      - name: Teardown
+        if: always()
+        run: tests/integration/teardown.sh
