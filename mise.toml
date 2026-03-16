@@ -2,5 +2,5 @@
 rust = "1.93.0"
 
 [tasks.build]
-description = "Build release binary and install to ~/.cargo/bin"
-run = "cargo build --release && cargo install --path . --offline"
+description = "Build, install to ~/.cargo/bin, and push to running sidecars"
+run = "cargo install --path . && kap dev push"
