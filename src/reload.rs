@@ -278,9 +278,14 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
             "# the main wrapper (/opt/kap/gitconfig) with gpg.ssh.program override;",
             "# GIT_CONFIG_GLOBAL is set by the compose overlay so it works in all contexts.",
             "KEY=$(GIT_CONFIG_GLOBAL= git config --global user.signingkey 2>/dev/null || true)",
+            "EMAIL=$(GIT_CONFIG_GLOBAL= git config --global user.email 2>/dev/null || true)",
             "if [ -n \"$KEY\" ]; then",
             "  echo \"$KEY\" > ~/.ssh-signing-key.pub",
             "  git config -f ~/.gitconfig-kap user.signingkey ~/.ssh-signing-key.pub",
+            "  if [ -n \"$EMAIL\" ]; then",
+            "    echo \"$EMAIL $KEY\" > ~/.ssh-allowed-signers",
+            "    git config -f ~/.gitconfig-kap gpg.ssh.allowedSignersFile ~/.ssh-allowed-signers",
+            "  fi",
             "fi",
         ]);
     } else {

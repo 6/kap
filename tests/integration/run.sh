@@ -101,11 +101,21 @@ else
   fail "signed commit failed"
 fi
 
+echo "[6] Signature verification works (allowedSignersFile)"
+if run bash -c '
+  cd /tmp/test-repo
+  git log --show-signature -1 2>&1
+' 2>&1 | grep -q "Good"; then
+  pass "signature verified via allowedSignersFile"
+else
+  fail "signature verification failed (allowedSignersFile missing or wrong)"
+fi
+
 # --- Domain proxy ---
 echo ""
 echo "--- Domain proxy ---"
 
-echo "[6] DNS resolves allowed domain"
+echo "[7] DNS resolves allowed domain"
 if run getent hosts github.com >/dev/null 2>&1; then
   pass "github.com resolves"
 else
@@ -117,14 +127,14 @@ else
   fi
 fi
 
-echo "[7] DNS blocks disallowed domain"
+echo "[8] DNS blocks disallowed domain"
 if ! run getent hosts evil.example.com >/dev/null 2>&1; then
   pass "evil.example.com blocked"
 else
   fail "evil.example.com resolved (should be blocked)"
 fi
 
-echo "[8] HTTPS to disallowed domain denied"
+echo "[9] HTTPS to disallowed domain denied"
 # Install curl if not present (debian:bookworm-slim may not have it)
 run bash -c 'command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl) >/dev/null 2>&1' 2>/dev/null || true
 if ! run curl -sf --max-time 5 https://example.com >/dev/null 2>&1; then
@@ -141,14 +151,14 @@ TOML_PATH="$SCRIPT_DIR/project/.devcontainer/kap.toml"
 TOML_BACKUP="$TOML_PATH.bak"
 cp "$TOML_PATH" "$TOML_BACKUP"
 
-echo "[9] Domain blocked before allowlist change"
+echo "[10] Domain blocked before allowlist change"
 if ! run getent hosts example.com >/dev/null 2>&1; then
   pass "example.com blocked before hot-reload"
 else
   fail "example.com was not blocked (cannot test hot-reload)"
 fi
 
-echo "[10] Hot-reload: add domain to allowlist"
+echo "[11] Hot-reload: add domain to allowlist"
 cat > "$TOML_PATH" <<'TOML'
 ssh_signing = true
 
@@ -181,7 +191,7 @@ else
   fail "example.com still blocked after adding to allowlist"
 fi
 
-echo "[11] Hot-reload: remove domain from allowlist"
+echo "[12] Hot-reload: remove domain from allowlist"
 cp "$TOML_BACKUP" "$TOML_PATH"
 
 if wait_for_not 15 run getent hosts example.com; then
@@ -194,14 +204,14 @@ fi
 echo ""
 echo "--- CLI proxy ---"
 
-echo "[12] Shims created for configured tools"
+echo "[13] Shims created for configured tools"
 if run test -x /opt/kap/bin/curl && run test -x /opt/kap/bin/hostname && run test -x /opt/kap/bin/env; then
   pass "shims exist for curl, hostname, env"
 else
   fail "one or more shims missing"
 fi
 
-echo "[13] mode=proxy: hostname runs on sidecar"
+echo "[14] mode=proxy: hostname runs on sidecar"
 APP_HOSTNAME=$(run hostname 2>/dev/null || echo "")
 PROXY_HOSTNAME=$(run /opt/kap/bin/hostname 2>/dev/null || echo "")
 if [ -n "$PROXY_HOSTNAME" ] && [ "$PROXY_HOSTNAME" != "$APP_HOSTNAME" ]; then
@@ -210,7 +220,7 @@ else
   fail "proxy hostname ($PROXY_HOSTNAME) same as app ($APP_HOSTNAME) or empty"
 fi
 
-echo "[14] mode=proxy: curl fetches through sidecar"
+echo "[15] mode=proxy: curl fetches through sidecar"
 # The sidecar has direct internet access (no proxy needed). curl via shim
 # runs on the sidecar, so it can reach github.com without going through
 # the domain proxy.
@@ -220,7 +230,7 @@ else
   fail "curl via proxy mode failed"
 fi
 
-echo "[15] mode=direct: env var passed from sidecar to app"
+echo "[16] mode=direct: env var passed from sidecar to app"
 # The sidecar has TEST_SECRET in its environment (from .env).
 # Direct mode returns it to the shim, which exec's the real `env` binary.
 DIRECT_OUTPUT=$(run /opt/kap/bin/env 2>/dev/null || echo "")
@@ -234,14 +244,14 @@ fi
 echo ""
 echo "--- Post-start script ---"
 
-echo "[16] Post-start script exists and is executable"
+echo "[17] Post-start script exists and is executable"
 if run test -x /opt/kap/bin/kap-post-start; then
   pass "kap-post-start is executable"
 else
   fail "kap-post-start missing or not executable"
 fi
 
-echo "[17] Kap binary available on shared volume"
+echo "[18] Kap binary available on shared volume"
 if run test -x /opt/kap/kap; then
   pass "kap binary on shared volume"
 else
