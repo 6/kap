@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use kap::{
-    check, cli, connect_proxy, container, dev, init, init_env, mcp, mcp_cmd, proxy, reload, remote,
+    check, cli, connect_proxy, container, init, init_env, mcp, mcp_cmd, proxy, reload, remote,
     status, upgrade,
 };
 
@@ -97,13 +97,6 @@ enum Command {
         #[command(subcommand)]
         command: RemoteCommand,
     },
-    /// Development tools for working on kap itself
-    #[command(display_order = 22)]
-    Dev {
-        #[command(subcommand)]
-        command: DevCommand,
-    },
-
     // -- Hidden (sidecar internals) --
     /// Check proxy health (runs inside the sidecar)
     #[command(hide = true)]
@@ -175,12 +168,6 @@ enum RemoteCommand {
         /// Device ID to revoke
         device_id: String,
     },
-}
-
-#[derive(Subcommand)]
-enum DevCommand {
-    /// Build and push kap binary to all running sidecar containers
-    Push,
 }
 
 #[derive(Subcommand)]
@@ -363,9 +350,6 @@ async fn main() -> anyhow::Result<()> {
                 RemoteCommand::Revoke { device_id } => remote::revoke(&data_dir, &device_id),
             }
         }
-        Command::Dev { command } => match command {
-            DevCommand::Push => dev::push(),
-        },
         Command::Status => status::run(),
         Command::Up { reset } => container::up(None, reset),
         Command::Upgrade => upgrade::run(),

@@ -9,10 +9,10 @@ cargo check          # fast compile check
 cargo build          # full build
 cargo test           # run all tests
 cargo run -- --help  # CLI help
-cargo install --path .  # install to ~/.cargo/bin
+mise run build       # build, install, and push to running sidecars
 ```
 
-After any changes to CLI commands or flags, run `cargo install --path .` so the locally installed `kap` binary stays current.
+After any changes to CLI commands or flags, run `mise run build` to install the host binary, build the Linux sidecar binary via Docker, and deploy to all running sidecar containers.
 
 ## Architecture
 
@@ -83,7 +83,7 @@ Smoke tests in `.devcontainer/smoke-test.sh` cover end-to-end behavior across al
 After any code change that affects the proxy, overlay, or shims:
 
 ```bash
-mise run build                              # build + install to ~/.cargo/bin
+mise run build                              # build + install + push to sidecars
 kap up --reset                             # full recreate
 kap exec kap status                       # verify all checks pass
 kap exec .devcontainer/smoke-test.sh       # run smoke tests
