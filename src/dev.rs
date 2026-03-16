@@ -104,8 +104,9 @@ pub fn push() -> Result<()> {
         eprintln!("  ✓ Restarted remote daemon");
     }
     eprintln!();
-    eprintln!("  ⚠ Do NOT use kap up --reset (it will pull the");
-    eprintln!("    published image and overwrite the dev binary)");
+    eprintln!("  Next steps:");
+    eprintln!("    kap exec ...       running sidecars already have the new binary");
+    eprintln!("    kap up --reset     only if you changed the overlay/compose template");
     Ok(())
 }
 
