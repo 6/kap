@@ -616,11 +616,7 @@ name = "gh"
         std::fs::create_dir_all(&shim_dir).unwrap();
 
         // Write a config with an allowed domain
-        std::fs::write(
-            &config_path,
-            "[proxy.network]\nallow = [\"example.com\"]\n",
-        )
-        .unwrap();
+        std::fs::write(&config_path, "[proxy.network]\nallow = [\"example.com\"]\n").unwrap();
 
         let cfg = Config::load(config_path.to_str().unwrap()).unwrap();
         let allowlist = new_shared(crate::proxy::allowlist::Allowlist::new(
