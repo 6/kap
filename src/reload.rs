@@ -134,6 +134,12 @@ pub async fn watch_config(
         if fingerprint == last_fingerprint {
             continue;
         }
+        // Config file disappeared (Docker Desktop macOS bind mount flake).
+        // Keep the last known good config rather than swapping in an empty one.
+        if fingerprint.is_none() {
+            eprintln!("[sidecar] config file disappeared, keeping current config");
+            continue;
+        }
         last_fingerprint = fingerprint;
         match Config::load(&path) {
             Ok(cfg) => {
@@ -600,6 +606,55 @@ name = "gh"
     #[test]
     fn file_fingerprint_nonexistent_returns_none() {
         assert!(file_fingerprint("/nonexistent/path.toml").is_none());
+    }
+
+    #[tokio::test]
+    async fn watch_config_skips_reload_when_file_disappears() {
+        let dir = tempdir("watch-disappear");
+        let config_path = dir.join("kap.toml");
+        let shim_dir = dir.join("bin");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+
+        // Write a config with an allowed domain
+        std::fs::write(
+            &config_path,
+            "[proxy.network]\nallow = [\"example.com\"]\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load(config_path.to_str().unwrap()).unwrap();
+        let allowlist = new_shared(crate::proxy::allowlist::Allowlist::new(
+            cfg.allow_domains(),
+            &cfg.proxy.network.deny,
+        ));
+        let cli_tools = new_shared(CliTools::from_config(&cfg));
+        let mcp_filters = new_shared(McpFilters::from_config(&cfg));
+
+        assert!(load(&allowlist).is_allowed("example.com"));
+
+        // Start the watcher
+        let watcher = tokio::spawn(watch_config(
+            config_path.to_str().unwrap().to_string(),
+            allowlist.clone(),
+            cli_tools.clone(),
+            mcp_filters.clone(),
+            shim_dir,
+        ));
+
+        // Delete the config file (simulates Docker Desktop bind mount flake)
+        std::fs::remove_file(&config_path).unwrap();
+
+        // Wait for at least one poll cycle
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Allowlist should still have the original config
+        assert!(
+            load(&allowlist).is_allowed("example.com"),
+            "allowlist should retain last known good config when file disappears"
+        );
+
+        watcher.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
