@@ -262,6 +262,10 @@ pub fn write_post_start_script(cfg: &Config, shim_dir: &Path) -> anyhow::Result<
     if cfg.ssh_agent {
         lines.extend_from_slice(&[
             "",
+            "# Docker Desktop (macOS) creates the SSH agent socket as root:root 660.",
+            "# Non-root users (e.g. remoteUser: vscode) can't connect without this.",
+            "sudo chmod 666 /ssh-agent 2>/dev/null || true",
+            "",
             "# Route SSH through the kap proxy (all hosts, not just git).",
             "# Only write if no user-provided SSH config exists.",
             "if [ ! -f ~/.ssh/config ]; then",

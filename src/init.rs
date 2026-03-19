@@ -132,7 +132,7 @@ pub fn generate_overlay(
     let app_volumes = {
         let mut entries: Vec<String> = vec!["      - kap-bin:/opt/kap:ro".to_string()];
         if let Some(sock) = ssh_auth_sock {
-            entries.push(format!("      - {sock}:/ssh-agent:ro"));
+            entries.push(format!("      - {sock}:/ssh-agent"));
         }
         format!("\n    volumes:\n{}", entries.join("\n"))
     };
@@ -1565,7 +1565,7 @@ mod tests {
             Some("/run/host-services/ssh-auth.sock"),
             false,
         );
-        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
+        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
         // GIT_SSH_COMMAND is no longer in the overlay — SSH config handles it
         assert!(!overlay.contains("GIT_SSH_COMMAND"));
@@ -1591,7 +1591,7 @@ mod tests {
             false,
         );
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
-        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent:ro"));
+        assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent"));
         assert!(overlay.contains("SSH_AUTH_SOCK: /ssh-agent"));
     }
 
