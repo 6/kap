@@ -231,6 +231,88 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
     Ok(vars)
 }
 
+/// Re-evaluate shell patterns in an existing .env file.
+///
+/// Finds comment lines like `# GH_TOKEN=$(gh auth token)`, evaluates the
+/// shell expression on the host, and updates the resolved value on the next
+/// line. Returns the number of vars refreshed.
+pub fn refresh_env(env_path: &Path) -> Result<usize> {
+    let (existing_values, patterns) = load_env_file(env_path);
+
+    if patterns.is_empty() {
+        return Ok(0);
+    }
+
+    // Re-read original file content to preserve structure
+    let content = std::fs::read_to_string(env_path)
+        .with_context(|| format!("reading {}", env_path.display()))?;
+
+    let mut output_lines: Vec<String> = Vec::new();
+    let mut refreshed = 0usize;
+    let mut skip_next_value_for: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // If we just wrote a refreshed pattern comment, skip the old resolved value line
+        if let Some(ref var) = skip_next_value_for {
+            if trimmed.starts_with(&format!("{var}=")) {
+                skip_next_value_for = None;
+                continue;
+            }
+            // Line wasn't the expected value line — stop skipping
+            skip_next_value_for = None;
+        }
+
+        // Check if this is a pattern comment: # VAR=$(cmd)
+        if let Some(comment) = trimmed.strip_prefix("# ")
+            && let Some((key, val)) = comment.split_once('=')
+        {
+            let key = key.trim();
+            let val = val.trim();
+            if val.contains("$(") {
+                let resolved = eval_shell_substitution(val);
+                if !resolved.is_empty() {
+                    output_lines.push(format!("# {key}={val}"));
+                    output_lines.push(format!("{key}={resolved}"));
+                    refreshed += 1;
+                    skip_next_value_for = Some(key.to_string());
+                    continue;
+                }
+            }
+        }
+
+        output_lines.push(line.to_string());
+    }
+
+    // Also handle vars that have patterns but no comment line yet
+    // (e.g. first run: raw GH_TOKEN=$(gh auth token) without # prefix)
+    // This case is already handled by the normal line passthrough.
+
+    if refreshed > 0 {
+        let new_content = output_lines.join("\n") + "\n";
+        // Atomic write: .env.tmp → rename
+        let tmp_path = env_path.with_extension("env.tmp");
+        std::fs::write(&tmp_path, &new_content)
+            .with_context(|| format!("writing {}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, env_path).with_context(|| {
+            format!("renaming {} to {}", tmp_path.display(), env_path.display())
+        })?;
+
+        // Also check for vars whose resolved value changed
+        let (new_values, _) = load_env_file(env_path);
+        for (key, new_val) in &new_values {
+            if let Some(old_val) = existing_values.get(key)
+                && old_val != new_val
+            {
+                eprintln!("[env] refreshed {key}");
+            }
+        }
+    }
+
+    Ok(refreshed)
+}
+
 /// Extract ${VAR} references from a string.
 fn extract_env_refs(s: &str, vars: &mut Vec<String>) {
     let mut rest = s;
@@ -483,6 +565,61 @@ allow = ["github.com"]
         let overlay = std::fs::read_to_string(dc.join(crate::init::OVERLAY_FILENAME)).unwrap();
         assert!(overlay.contains("app:"));
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn refresh_env_evaluates_patterns() {
+        let dir = std::env::temp_dir().join(format!("kap-refresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(
+            &path,
+            "# MY_VAR=$(echo refreshed)\nMY_VAR=stale\nSTATIC=keep\n",
+        )
+        .unwrap();
+
+        let count = refresh_env(&path).unwrap();
+        assert_eq!(count, 1);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("MY_VAR=refreshed"));
+        assert!(content.contains("# MY_VAR=$(echo refreshed)"));
+        assert!(content.contains("STATIC=keep"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn refresh_env_no_patterns_is_noop() {
+        let dir = std::env::temp_dir().join(format!("kap-refresh-noop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "STATIC=value\n").unwrap();
+
+        let count = refresh_env(&path).unwrap();
+        assert_eq!(count, 0);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "STATIC=value\n");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn refresh_env_multiple_patterns() {
+        let dir = std::env::temp_dir().join(format!("kap-refresh-multi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "# A=$(echo aa)\nA=old_a\n# B=$(echo bb)\nB=old_b\n").unwrap();
+
+        let count = refresh_env(&path).unwrap();
+        assert_eq!(count, 2);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("A=aa"));
+        assert!(content.contains("B=bb"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

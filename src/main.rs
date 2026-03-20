@@ -69,6 +69,9 @@ enum Command {
     Upgrade,
 
     // -- Diagnostics --
+    /// Refresh tokens in .devcontainer/.env (re-evaluates shell patterns)
+    #[command(display_order = 7)]
+    Env,
     /// Check if kap is working (runs checks via docker exec)
     #[command(display_order = 10)]
     Status,
@@ -218,6 +221,21 @@ async fn main() -> anyhow::Result<()> {
         Command::SidecarCliShim { tool, args } => cli::shim::run(&tool, &args).await,
         Command::SidecarConnectProxy { host, port } => connect_proxy::run(&host, port),
         Command::Down { project, volumes } => container::down(project, None, volumes),
+        Command::Env => {
+            let cwd = std::env::current_dir()?;
+            let env_path = cwd.join(".devcontainer/.env");
+            anyhow::ensure!(
+                env_path.exists(),
+                ".devcontainer/.env not found — run `kap up` first"
+            );
+            let count = init_env::refresh_env(&env_path)?;
+            if count > 0 {
+                println!("Refreshed {count} env var(s) — sidecar picks up changes within 2s");
+            } else {
+                println!("No shell patterns to refresh in .devcontainer/.env");
+            }
+            Ok(())
+        }
         Command::Exec { project, cmd } => container::exec(project, cmd),
         Command::Init {
             project_dir,
@@ -287,6 +305,10 @@ async fn main() -> anyhow::Result<()> {
             let shared_cli = reload::new_shared(reload::CliTools::from_config(&cfg));
             let shared_mcp = reload::new_shared(reload::McpFilters::from_config(&cfg));
 
+            // Load initial .env values (bind-mounted via ..:/workspace:ro)
+            let env_path = std::path::PathBuf::from("/workspace/.devcontainer/.env");
+            let shared_env = reload::new_shared(reload::parse_env_file(&env_path));
+
             // Write CLI shim scripts and post-start script to shared volume
             let shim_dir = std::path::PathBuf::from("/opt/kap/bin");
             if let Err(e) = reload::write_shims(&cfg, &shim_dir) {
@@ -320,7 +342,8 @@ async fn main() -> anyhow::Result<()> {
             if let Some(ref _cli_cfg) = cfg.cli {
                 let logger = proxy::log::ProxyLogger::new(&cfg.proxy.observe.log);
                 let cli_tools = shared_cli.clone();
-                set.spawn(async move { cli::run(cli_tools, logger).await });
+                let cli_env = shared_env.clone();
+                set.spawn(async move { cli::run(cli_tools, cli_env, logger).await });
             }
 
             // Spawn config watcher for hot-reload
@@ -330,8 +353,10 @@ async fn main() -> anyhow::Result<()> {
                 let ct = shared_cli.clone();
                 let mf = shared_mcp.clone();
                 let sd = shim_dir.clone();
+                let ev = shared_env.clone();
+                let ep = env_path.clone();
                 set.spawn(async move {
-                    reload::watch_config(config_path, al, ct, mf, sd).await;
+                    reload::watch_config(config_path, al, ct, mf, sd, ev, ep).await;
                     Ok(())
                 });
             }

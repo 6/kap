@@ -198,6 +198,21 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
         None => None,
     };
 
+    // Auto-refresh .env shell patterns (e.g. GH_TOKEN) before entering the container.
+    // Non-fatal: stale tokens are better than blocking exec.
+    {
+        let ws = match &workspace {
+            Some(p) => p.clone(),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        let env_path = ws.join(".devcontainer/.env");
+        if env_path.exists()
+            && let Err(e) = crate::init_env::refresh_env(&env_path)
+        {
+            eprintln!("[exec] warning: could not refresh .env: {e}");
+        }
+    }
+
     let status = exec_with(ExecOptions {
         workspace,
         cmd,

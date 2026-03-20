@@ -73,6 +73,34 @@ impl CliTools {
 }
 
 // ---------------------------------------------------------------------------
+// Env vars from .env file (shared between CLI proxy and reloader)
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct EnvVars {
+    pub vars: HashMap<String, String>,
+}
+
+/// Parse a .env file into key=value pairs. Skips comments and blank lines.
+pub fn parse_env_file(path: &Path) -> EnvVars {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return EnvVars::default(),
+    };
+    let mut vars = HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once('=') {
+            vars.insert(key.trim().to_string(), val.trim().to_string());
+        }
+    }
+    EnvVars { vars }
+}
+
+// ---------------------------------------------------------------------------
 // MCP tool filters (shared between MCP proxy and reloader)
 // ---------------------------------------------------------------------------
 
@@ -126,53 +154,69 @@ pub async fn watch_config(
     cli_tools: Shared<CliTools>,
     mcp_filters: Shared<McpFilters>,
     shim_dir: PathBuf,
+    env_vars: Shared<EnvVars>,
+    env_path: PathBuf,
 ) {
     let mut last_fingerprint = file_fingerprint(&path);
+    let mut last_env_fingerprint = file_fingerprint(&env_path.to_string_lossy());
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        // Check kap.toml for changes
         let fingerprint = file_fingerprint(&path);
-        if fingerprint == last_fingerprint {
-            continue;
-        }
-        // Config file disappeared (Docker Desktop macOS bind mount flake).
-        // Keep the last known good config rather than swapping in an empty one.
-        if fingerprint.is_none() {
-            eprintln!("[sidecar] config file disappeared, keeping current config");
-            continue;
-        }
-        last_fingerprint = fingerprint;
-        match Config::load(&path) {
-            Ok(cfg) => {
-                // Rebuild allowlist (include MCP upstream domains)
-                let mcp_domains = cfg.mcp_upstream_domains();
-                let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();
-                all_allow.extend(mcp_domains);
-                store(
-                    &allowlist,
-                    Allowlist::new(&all_allow, &cfg.proxy.network.deny),
-                );
+        if fingerprint != last_fingerprint {
+            // Config file disappeared (Docker Desktop macOS bind mount flake).
+            // Keep the last known good config rather than swapping in an empty one.
+            if fingerprint.is_none() {
+                eprintln!("[sidecar] config file disappeared, keeping current config");
+            } else {
+                last_fingerprint = fingerprint;
+                match Config::load(&path) {
+                    Ok(cfg) => {
+                        // Rebuild allowlist (include MCP upstream domains)
+                        let mcp_domains = cfg.mcp_upstream_domains();
+                        let mut all_allow: Vec<String> = cfg.allow_domains().to_vec();
+                        all_allow.extend(mcp_domains);
+                        store(
+                            &allowlist,
+                            Allowlist::new(&all_allow, &cfg.proxy.network.deny),
+                        );
 
-                // Rebuild CLI tools
-                store(&cli_tools, CliTools::from_config(&cfg));
+                        // Rebuild CLI tools
+                        store(&cli_tools, CliTools::from_config(&cfg));
 
-                // Rebuild MCP filters
-                store(&mcp_filters, McpFilters::from_config(&cfg));
+                        // Rebuild MCP filters
+                        store(&mcp_filters, McpFilters::from_config(&cfg));
 
-                // Update shim scripts and post-start script on shared volume
-                if let Err(e) = write_shims(&cfg, &shim_dir) {
-                    eprintln!("[sidecar] failed to update shims: {e}");
+                        // Update shim scripts and post-start script on shared volume
+                        if let Err(e) = write_shims(&cfg, &shim_dir) {
+                            eprintln!("[sidecar] failed to update shims: {e}");
+                        }
+                        if let Err(e) = write_post_start_script(&cfg, &shim_dir) {
+                            eprintln!("[sidecar] failed to update post-start script: {e}");
+                        }
+                        if let Err(e) = write_gitconfig(&cfg, &shim_dir) {
+                            eprintln!("[sidecar] failed to update gitconfig: {e}");
+                        }
+
+                        eprintln!("[sidecar] config reloaded");
+                    }
+                    Err(e) => {
+                        eprintln!("[sidecar] config reload failed: {e}");
+                    }
                 }
-                if let Err(e) = write_post_start_script(&cfg, &shim_dir) {
-                    eprintln!("[sidecar] failed to update post-start script: {e}");
-                }
-                if let Err(e) = write_gitconfig(&cfg, &shim_dir) {
-                    eprintln!("[sidecar] failed to update gitconfig: {e}");
-                }
-
-                eprintln!("[sidecar] config reloaded");
             }
-            Err(e) => {
-                eprintln!("[sidecar] config reload failed: {e}");
+        }
+
+        // Check .env for changes
+        let env_fp = file_fingerprint(&env_path.to_string_lossy());
+        if env_fp != last_env_fingerprint {
+            if env_fp.is_none() {
+                // .env disappeared — keep current values
+            } else {
+                last_env_fingerprint = env_fp;
+                store(&env_vars, parse_env_file(&env_path));
+                eprintln!("[sidecar] .env reloaded");
             }
         }
     }
@@ -430,6 +474,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_env_file_basic() {
+        let dir = tempdir("envfile-basic");
+        let path = dir.join(".env");
+        std::fs::write(
+            &path,
+            "# GH_TOKEN=$(gh auth token)\nGH_TOKEN=abc123\nOTHER=val\n",
+        )
+        .unwrap();
+
+        let env = parse_env_file(&path);
+        assert_eq!(env.vars.get("GH_TOKEN").unwrap(), "abc123");
+        assert_eq!(env.vars.get("OTHER").unwrap(), "val");
+        assert_eq!(env.vars.len(), 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_env_file_missing() {
+        let env = parse_env_file(Path::new("/nonexistent/.env"));
+        assert!(env.vars.is_empty());
+    }
+
+    #[test]
+    fn parse_env_file_skips_comments() {
+        let dir = tempdir("envfile-comments");
+        let path = dir.join(".env");
+        std::fs::write(&path, "# comment\n\nKEY=val\n# another\n").unwrap();
+
+        let env = parse_env_file(&path);
+        assert_eq!(env.vars.len(), 1);
+        assert_eq!(env.vars.get("KEY").unwrap(), "val");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn shared_load_store() {
         let shared = new_shared(42u32);
         assert_eq!(*load(&shared), 42);
@@ -634,12 +715,17 @@ name = "gh"
         assert!(load(&allowlist).is_allowed("example.com"));
 
         // Start the watcher
+        let env_path = dir.join(".env");
+        std::fs::write(&env_path, "").unwrap();
+        let env_vars = new_shared(EnvVars::default());
         let watcher = tokio::spawn(watch_config(
             config_path.to_str().unwrap().to_string(),
             allowlist.clone(),
             cli_tools.clone(),
             mcp_filters.clone(),
             shim_dir,
+            env_vars,
+            env_path,
         ));
 
         // Delete the config file (simulates Docker Desktop bind mount flake)

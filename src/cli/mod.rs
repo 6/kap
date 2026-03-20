@@ -16,16 +16,21 @@ use tokio::net::TcpListener;
 
 use crate::config::CliToolMode;
 use crate::proxy::log::{ProxyLogEntry, ProxyLogger};
-use crate::reload::{self, CliTools, Shared};
+use crate::reload::{self, CliTools, EnvVars, Shared};
 
 struct CliState {
     tools: Shared<CliTools>,
+    env_vars: Shared<EnvVars>,
     logger: ProxyLogger,
 }
 
 const DEFAULT_CLI_LISTEN: &str = "0.0.0.0:3130";
 
-pub async fn run(tools: Shared<CliTools>, logger: ProxyLogger) -> Result<()> {
+pub async fn run(
+    tools: Shared<CliTools>,
+    env_vars: Shared<EnvVars>,
+    logger: ProxyLogger,
+) -> Result<()> {
     // Log initial tools
     {
         let t = reload::load(&tools);
@@ -38,7 +43,11 @@ pub async fn run(tools: Shared<CliTools>, logger: ProxyLogger) -> Result<()> {
         }
     }
 
-    let state = Arc::new(CliState { tools, logger });
+    let state = Arc::new(CliState {
+        tools,
+        env_vars,
+        logger,
+    });
     let listener = TcpListener::bind(DEFAULT_CLI_LISTEN).await?;
     eprintln!("[cli] listening on {DEFAULT_CLI_LISTEN}");
 
@@ -110,10 +119,20 @@ async fn handle_request(
     if tool.mode == CliToolMode::Direct {
         let entry = ProxyLogEntry::new(&log_target, "direct", &cmd_display);
         let _ = state.logger.log(&entry).await;
+        // Prefer hot-reloaded .env values (refreshed by `kap exec`/`kap env`),
+        // fall back to process env (set by docker-compose at container start).
+        let env_snapshot = reload::load(&state.env_vars);
         let env_pairs: Vec<String> = tool
             .env_vars
             .iter()
-            .filter_map(|var| std::env::var(var).ok().map(|val| format!("{var}={val}")))
+            .filter_map(|var| {
+                env_snapshot
+                    .vars
+                    .get(var)
+                    .cloned()
+                    .or_else(|| std::env::var(var).ok())
+                    .map(|val| format!("{var}={val}"))
+            })
             .collect();
         let env_b64 = base64::engine::general_purpose::STANDARD.encode(env_pairs.join("\n"));
 
@@ -157,9 +176,15 @@ async fn handle_request(
     if let Ok(home) = std::env::var("HOME") {
         cmd.env("HOME", home);
     }
-    // Pass only the configured env vars
+    // Pass only the configured env vars (prefer hot-reloaded .env, fall back to process env)
+    let env_snapshot = reload::load(&state.env_vars);
     for var in &tool.env_vars {
-        if let Ok(val) = std::env::var(var) {
+        if let Some(val) = env_snapshot
+            .vars
+            .get(var)
+            .cloned()
+            .or_else(|| std::env::var(var).ok())
+        {
             cmd.env(var, val);
         }
     }
@@ -253,6 +278,7 @@ mod tests {
         let shared = reload::new_shared(CliTools { tools });
         let state = Arc::new(CliState {
             tools: shared,
+            env_vars: reload::new_shared(reload::EnvVars::default()),
             logger: ProxyLogger::new("/dev/null"),
         });
 
