@@ -7,13 +7,14 @@
 /// Also regenerates the compose overlay (docker-compose.kap.yml) so it
 /// always matches the installed kap version and kap.toml config.
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub fn run(project_dir: &str) -> Result<()> {
     let project = Path::new(project_dir);
     let devcontainer_dir = project.join(".devcontainer");
     let config_path = devcontainer_dir.join("kap.toml");
-    let env_path = devcontainer_dir.join(".env");
+    let env_path = crate::init::env_file_for_project(&devcontainer_dir);
 
     if !config_path.exists() {
         anyhow::bail!(
@@ -27,7 +28,7 @@ pub fn run(project_dir: &str) -> Result<()> {
         eprintln!("[sidecar-init] warning: could not regenerate overlay: {e}");
     }
 
-    let needed_vars = vars_from_config(&config_path)?;
+    let (needed_vars, env_overrides) = vars_from_config(&config_path)?;
 
     // Load existing .env values and shell patterns (# KEY=$(cmd))
     let (existing, existing_patterns) = load_env_file(&env_path);
@@ -35,7 +36,18 @@ pub fn run(project_dir: &str) -> Result<()> {
     let mut lines: Vec<String> = Vec::new();
 
     for var in &needed_vars {
-        // Re-evaluate shell patterns stored as comments (# KEY=$(cmd))
+        // 1. Explicit [env] override from kap.toml (highest priority)
+        if let Some(val) = env_overrides.get(var.as_str())
+            && let Some(resolved) = resolve_env_value(var, val)
+        {
+            if val.contains("$(") {
+                // Shell expression — write pattern comment so refresh_env() re-evaluates
+                lines.push(format!("# {var}={val}"));
+            }
+            lines.push(format!("{var}={resolved}"));
+            continue;
+        }
+        // 2. Re-evaluate shell patterns stored as comments (# KEY=$(cmd))
         if let Some(pattern) = existing_patterns.get(var.as_str()) {
             let resolved = eval_shell_substitution(pattern);
             if !resolved.is_empty() {
@@ -44,7 +56,7 @@ pub fn run(project_dir: &str) -> Result<()> {
                 continue;
             }
         }
-        // Keep existing value (or evaluate if it contains $(cmd))
+        // 3. Keep existing value (or evaluate if it contains $(cmd))
         if let Some(val) = existing.get(var.as_str()) {
             if val.contains("$(") {
                 let resolved = eval_shell_substitution(val);
@@ -58,7 +70,7 @@ pub fn run(project_dir: &str) -> Result<()> {
                 continue;
             }
         }
-        // Otherwise try host environment
+        // 4. Try host environment
         if let Ok(val) = std::env::var(var)
             && !val.is_empty()
         {
@@ -66,7 +78,7 @@ pub fn run(project_dir: &str) -> Result<()> {
             lines.push(format!("{var}={val}"));
             continue;
         }
-        // Last resort: try well-known shell expression (e.g. GH_TOKEN -> `gh auth token`)
+        // 5. Last resort: try well-known shell expression (e.g. GH_TOKEN -> `gh auth token`)
         if let Some(expr) = crate::init::env_var_default(var) {
             let resolved = eval_shell_substitution(expr);
             if !resolved.is_empty() {
@@ -194,14 +206,65 @@ fn load_env_file(
     (values, patterns)
 }
 
-/// Parse kap.toml and collect all env var names referenced by MCP server configs.
-fn vars_from_config(path: &Path) -> Result<Vec<String>> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let config: crate::config::Config =
-        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+/// Resolve an `[env]` value from kap.toml. Supports three forms:
+/// - `${VAR}` — env var reference from host
+/// - `$(cmd)` — shell expression
+/// - `"literal"` — static value
+fn resolve_env_value(name: &str, val: &str) -> Option<String> {
+    if val.contains("$(") {
+        let resolved = eval_shell_substitution(val);
+        if resolved.is_empty() {
+            eprintln!("[sidecar-init] warning: [env] {name} expression evaluated to empty");
+            return None;
+        }
+        Some(resolved)
+    } else if val.contains("${") {
+        // Expand ${VAR} references from host environment
+        let resolved = expand_env_refs(val);
+        if resolved.is_empty() {
+            eprintln!("[sidecar-init] warning: [env] {name} env ref resolved to empty");
+            return None;
+        }
+        Some(resolved)
+    } else {
+        // Static value
+        Some(val.to_string())
+    }
+}
+
+/// Expand `${VAR}` references in a string using host environment variables.
+fn expand_env_refs(s: &str) -> String {
+    let mut result = s.to_string();
+    let mut rest = s;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find('}') {
+            let var = &after[..end];
+            if let Ok(val) = std::env::var(var) {
+                result = result.replace(&format!("${{{var}}}"), &val);
+            } else {
+                eprintln!("[sidecar-init] warning: ${{{var}}} not found in host environment");
+                result = result.replace(&format!("${{{var}}}"), "");
+            }
+            rest = &after[end + 1..];
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+/// Parse kap.toml (with global merge) and collect env var names + explicit [env] overrides.
+fn vars_from_config(path: &Path) -> Result<(Vec<String>, HashMap<String, String>)> {
+    let config = crate::config::Config::load(&path.to_string_lossy())
+        .with_context(|| format!("loading {}", path.display()))?;
 
     let mut vars = Vec::new();
+
+    // Vars from [env] section
+    for key in config.env.keys() {
+        vars.push(key.clone());
+    }
 
     if let Some(mcp) = &config.mcp {
         for server in &mcp.servers {
@@ -226,9 +289,10 @@ fn vars_from_config(path: &Path) -> Result<Vec<String>> {
         }
     }
 
+    let env_overrides = config.env.clone();
     vars.sort();
     vars.dedup();
-    Ok(vars)
+    Ok((vars, env_overrides))
 }
 
 /// Re-evaluate shell patterns in an existing .env file.
@@ -477,16 +541,18 @@ mod tests {
 [mcp]
 [[mcp.servers]]
 name = "a"
+allow = ["*"]
 headers = { "X-Key" = "${A_API_KEY}" }
 
 [[mcp.servers]]
 name = "b"
+allow = ["*"]
 headers = { "X-Key" = "${B_API_KEY}", "X-Other" = "${C_SECRET}" }
 "#,
         )
         .unwrap();
 
-        let vars = vars_from_config(&path).unwrap();
+        let (vars, _) = vars_from_config(&path).unwrap();
         assert_eq!(vars, vec!["A_API_KEY", "B_API_KEY", "C_SECRET"]);
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -508,7 +574,7 @@ mode = "direct"
         )
         .unwrap();
 
-        let vars = vars_from_config(&path).unwrap();
+        let (vars, _) = vars_from_config(&path).unwrap();
         assert_eq!(vars, vec!["GH_TOKEN"]); // auto-resolved from DETECTABLE_TOOLS
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -649,6 +715,179 @@ allow = ["github.com"]
             let _ = result;
         }
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_env_value_static() {
+        let result = resolve_env_value("TEST", "static_value");
+        assert_eq!(result, Some("static_value".to_string()));
+    }
+
+    #[test]
+    fn resolve_env_value_shell_expression() {
+        let result = resolve_env_value("TEST", "$(echo hello)");
+        assert_eq!(result, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn resolve_env_value_env_ref() {
+        // SAFETY: test-only, single-threaded access to unique var name
+        unsafe { std::env::set_var("KAP_TEST_RESOLVE_VAR", "from_env") };
+        let result = resolve_env_value("TEST", "${KAP_TEST_RESOLVE_VAR}");
+        assert_eq!(result, Some("from_env".to_string()));
+        unsafe { std::env::remove_var("KAP_TEST_RESOLVE_VAR") };
+    }
+
+    #[test]
+    fn resolve_env_value_env_ref_missing() {
+        // SAFETY: test-only, single-threaded access to unique var name
+        unsafe { std::env::remove_var("KAP_TEST_MISSING_VAR") };
+        let result = resolve_env_value("TEST", "${KAP_TEST_MISSING_VAR}");
+        // Missing env ref resolves to empty → None
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn expand_env_refs_basic() {
+        // SAFETY: test-only, single-threaded access to unique var name
+        unsafe { std::env::set_var("KAP_TEST_EXPAND_A", "aaa") };
+        let result = expand_env_refs("prefix-${KAP_TEST_EXPAND_A}-suffix");
+        assert_eq!(result, "prefix-aaa-suffix");
+        unsafe { std::env::remove_var("KAP_TEST_EXPAND_A") };
+    }
+
+    #[test]
+    fn expand_env_refs_multiple() {
+        // SAFETY: test-only, single-threaded access to unique var names
+        unsafe {
+            std::env::set_var("KAP_TEST_EXP_X", "xx");
+            std::env::set_var("KAP_TEST_EXP_Y", "yy");
+        }
+        let result = expand_env_refs("${KAP_TEST_EXP_X}-${KAP_TEST_EXP_Y}");
+        assert_eq!(result, "xx-yy");
+        unsafe {
+            std::env::remove_var("KAP_TEST_EXP_X");
+            std::env::remove_var("KAP_TEST_EXP_Y");
+        }
+    }
+
+    #[test]
+    fn vars_from_config_includes_env_section() {
+        let dir = std::env::temp_dir().join(format!("kap-env-section-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("kap.toml");
+        std::fs::write(
+            &path,
+            r#"
+[env]
+MY_TOKEN = "static_val"
+"#,
+        )
+        .unwrap();
+
+        let (vars, overrides) = vars_from_config(&path).unwrap();
+        assert!(vars.contains(&"MY_TOKEN".to_string()));
+        assert_eq!(overrides["MY_TOKEN"], "static_val");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn env_override_beats_existing_env_file() {
+        let dir = std::env::temp_dir().join(format!("kap-env-override-{}", std::process::id()));
+        let dc = dir.join(".devcontainer");
+        std::fs::create_dir_all(&dc).unwrap();
+
+        // Write a config with [env] override
+        std::fs::write(
+            dc.join("kap.toml"),
+            r#"
+[env]
+MY_VAR = "$(echo from_config)"
+"#,
+        )
+        .unwrap();
+
+        let env_path = crate::init::env_file_for_project(&dc);
+        // Pre-populate .env with a different value
+        std::fs::write(&env_path, "MY_VAR=old_value\n").unwrap();
+
+        // Write minimal devcontainer.json (needed by regenerate_overlay)
+        std::fs::write(dc.join("devcontainer.json"), "{}").unwrap();
+
+        run(dir.to_str().unwrap()).unwrap();
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(
+            content.contains("MY_VAR=from_config"),
+            "expected [env] override, got: {content}"
+        );
+        // Shell expression should have pattern comment for refresh_env()
+        assert!(content.contains("# MY_VAR=$(echo from_config)"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn env_override_static_value() {
+        let dir = std::env::temp_dir().join(format!("kap-env-static-{}", std::process::id()));
+        let dc = dir.join(".devcontainer");
+        std::fs::create_dir_all(&dc).unwrap();
+
+        std::fs::write(
+            dc.join("kap.toml"),
+            r#"
+[env]
+MY_STATIC = "literal_value"
+"#,
+        )
+        .unwrap();
+        std::fs::write(dc.join("devcontainer.json"), "{}").unwrap();
+
+        run(dir.to_str().unwrap()).unwrap();
+
+        let env_path = crate::init::env_file_for_project(&dc);
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(
+            content.contains("MY_STATIC=literal_value"),
+            "expected static value, got: {content}"
+        );
+        // Static values should NOT have a pattern comment
+        assert!(!content.contains("# MY_STATIC="));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn env_override_env_ref() {
+        let dir = std::env::temp_dir().join(format!("kap-env-ref-{}", std::process::id()));
+        let dc = dir.join(".devcontainer");
+        std::fs::create_dir_all(&dc).unwrap();
+
+        // SAFETY: test-only, single-threaded access to unique var name
+        unsafe { std::env::set_var("KAP_TEST_PROJECT_TOKEN", "project_pat_123") };
+        std::fs::write(
+            dc.join("kap.toml"),
+            r#"
+[env]
+GH_TOKEN = "${KAP_TEST_PROJECT_TOKEN}"
+"#,
+        )
+        .unwrap();
+        std::fs::write(dc.join("devcontainer.json"), "{}").unwrap();
+
+        run(dir.to_str().unwrap()).unwrap();
+
+        let env_path = crate::init::env_file_for_project(&dc);
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(
+            content.contains("GH_TOKEN=project_pat_123"),
+            "expected env ref expansion, got: {content}"
+        );
+
+        // SAFETY: test-only cleanup
+        unsafe { std::env::remove_var("KAP_TEST_PROJECT_TOKEN") };
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

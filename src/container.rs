@@ -205,7 +205,8 @@ pub fn exec(project: Option<String>, cmd: Vec<String>) -> Result<()> {
             Some(p) => p.clone(),
             None => std::env::current_dir().unwrap_or_default(),
         };
-        let env_path = ws.join(".devcontainer/.env");
+        let dc_dir = ws.join(".devcontainer");
+        let env_path = crate::init::env_file_for_project(&dc_dir);
         if env_path.exists()
             && let Err(e) = crate::init_env::refresh_env(&env_path)
         {

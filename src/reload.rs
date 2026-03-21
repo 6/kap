@@ -167,8 +167,12 @@ pub async fn watch_config(
         if fingerprint != last_fingerprint {
             // Config file disappeared (Docker Desktop macOS bind mount flake).
             // Keep the last known good config rather than swapping in an empty one.
+            // Only log once per disappearance (not every poll cycle).
             if fingerprint.is_none() {
-                eprintln!("[sidecar] config file disappeared, keeping current config");
+                if last_fingerprint.is_some() {
+                    eprintln!("[sidecar] config file disappeared, keeping current config");
+                    last_fingerprint = None;
+                }
             } else {
                 last_fingerprint = fingerprint;
                 match Config::load(&path) {

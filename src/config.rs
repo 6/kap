@@ -17,6 +17,10 @@ pub struct Config {
     pub compose: Option<ComposeConfig>,
     pub cli: Option<CliConfig>,
     pub setup: Option<SetupConfig>,
+    /// Explicit env var overrides. Values can be static ("ghp_xxx"),
+    /// shell expressions ("$(op read ...)"), or env var references ("${MY_VAR}").
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -250,6 +254,11 @@ impl Config {
                     project_mcp.servers.push(gserver);
                 }
             }
+        }
+
+        // Env vars: global fills gaps, project keys take priority
+        for (key, val) in global.env {
+            self.env.entry(key).or_insert(val);
         }
     }
 
@@ -1022,5 +1031,60 @@ allow = ["*"]
         let mut config: Config = toml::from_str(toml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("empty name"));
+    }
+
+    #[test]
+    fn parse_env_section() {
+        let toml = r#"
+[env]
+GH_TOKEN = "ghp_xxx"
+API_KEY = "$(op read 'op://vault/key')"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.env.len(), 2);
+        assert_eq!(config.env["GH_TOKEN"], "ghp_xxx");
+        assert_eq!(config.env["API_KEY"], "$(op read 'op://vault/key')");
+    }
+
+    #[test]
+    fn parse_env_empty_is_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn merge_global_env_project_wins() {
+        let mut project: Config = toml::from_str(
+            r#"
+[env]
+GH_TOKEN = "project_token"
+"#,
+        )
+        .unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[env]
+GH_TOKEN = "global_token"
+OTHER = "global_other"
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        assert_eq!(project.env["GH_TOKEN"], "project_token");
+        assert_eq!(project.env["OTHER"], "global_other");
+    }
+
+    #[test]
+    fn merge_global_env_empty_project() {
+        let mut project: Config = toml::from_str("").unwrap();
+        let global: Config = toml::from_str(
+            r#"
+[env]
+GH_TOKEN = "global_token"
+"#,
+        )
+        .unwrap();
+        project.merge_global(global);
+        assert_eq!(project.env["GH_TOKEN"], "global_token");
     }
 }

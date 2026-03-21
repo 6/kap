@@ -113,7 +113,7 @@ enum Command {
         mcp: bool,
 
         /// Path to config file (for --mcp)
-        #[arg(short, long, default_value = "/etc/kap/config.toml")]
+        #[arg(short, long, default_value = "/workspace/.devcontainer/kap.toml")]
         config: String,
     },
     /// Forward a CLI command to the kap sidecar proxy (used by shim scripts)
@@ -149,7 +149,7 @@ enum Command {
         observe: bool,
 
         /// Path to config file
-        #[arg(short, long, default_value = "/etc/kap/config.toml")]
+        #[arg(short, long, default_value = "/workspace/.devcontainer/kap.toml")]
         config: String,
     },
 }
@@ -223,16 +223,18 @@ async fn main() -> anyhow::Result<()> {
         Command::Down { project, volumes } => container::down(project, None, volumes),
         Command::Env => {
             let cwd = std::env::current_dir()?;
-            let env_path = cwd.join(".devcontainer/.env");
+            let dc_dir = cwd.join(".devcontainer");
+            let env_path = init::env_file_for_project(&dc_dir);
             anyhow::ensure!(
                 env_path.exists(),
-                ".devcontainer/.env not found — run `kap up` first"
+                ".env not found at {} — run `kap up` first",
+                env_path.display()
             );
             let count = init_env::refresh_env(&env_path)?;
             if count > 0 {
                 println!("Refreshed {count} env var(s) — sidecar picks up changes within 2s");
             } else {
-                println!("No shell patterns to refresh in .devcontainer/.env");
+                println!("No shell patterns to refresh");
             }
             Ok(())
         }
@@ -305,8 +307,8 @@ async fn main() -> anyhow::Result<()> {
             let shared_cli = reload::new_shared(reload::CliTools::from_config(&cfg));
             let shared_mcp = reload::new_shared(reload::McpFilters::from_config(&cfg));
 
-            // Load initial .env values (bind-mounted via ..:/workspace:ro)
-            let env_path = std::path::PathBuf::from("/workspace/.devcontainer/.env");
+            // Load initial .env values (bind-mounted via ~/.kap/envs/<project>/)
+            let env_path = std::path::PathBuf::from("/etc/kap/envs/.env");
             let shared_env = reload::new_shared(reload::parse_env_file(&env_path));
 
             // Write CLI shim scripts and post-start script to shared volume

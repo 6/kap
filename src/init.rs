@@ -88,6 +88,19 @@ pub fn read_project_name(devcontainer_dir: &Path) -> String {
         .unwrap_or_else(|| "dev".to_string())
 }
 
+/// Return the host-side path to the .env file for a project: ~/.kap/envs/<project>/.env.
+/// Creates the directory if it doesn't exist.
+pub fn env_file_for_project(devcontainer_dir: &Path) -> std::path::PathBuf {
+    let project_name = read_project_name(devcontainer_dir);
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dir = std::path::Path::new(&home)
+        .join(".kap")
+        .join("envs")
+        .join(&project_name);
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(".env")
+}
+
 /// Read the service name from devcontainer.json. Defaults to "app".
 pub fn read_service_name(devcontainer_dir: &Path) -> Result<String> {
     let path = devcontainer_dir.join("devcontainer.json");
@@ -185,15 +198,15 @@ services:
   # Proxy sidecar: domain proxy (:3128), DNS forwarder (:53), MCP proxy (:3129)
   kap:
 {image_yaml}
-    volumes:
-      - ./kap.toml:/etc/kap/config.toml:ro{global_config_volume}
+    volumes:{global_config_volume}
       - ${{HOME}}/.kap/auth:/etc/kap/auth
+      - ${{HOME}}/.kap/envs/{project_name}:/etc/kap/envs
       - proxy-logs:/var/log/kap
       - kap-bin:/opt/kap
       - ..:/workspace:ro
-    entrypoint: ["sh", "-c", "cp /usr/local/bin/kap /opt/kap/kap && exec kap sidecar-proxy"]
+    entrypoint: ["sh", "-c", "[ -x /opt/kap/kap ] || cp /usr/local/bin/kap /opt/kap/kap; exec /opt/kap/kap sidecar-proxy"]
     env_file:
-      - path: .env
+      - path: ${{HOME}}/.kap/envs/{project_name}/.env
         required: false
     networks:
       kap_sandbox:
@@ -252,10 +265,7 @@ pub fn detect_ssh_auth_sock() -> Option<String> {
 /// Append kap-generated entries to .gitignore if not already present.
 pub fn gitignore_overlay(project_dir: &Path) -> Result<()> {
     let gitignore_path = project_dir.join(".gitignore");
-    let entries = [
-        format!(".devcontainer/{OVERLAY_FILENAME}"),
-        ".devcontainer/.env".to_string(),
-    ];
+    let entries = [format!(".devcontainer/{OVERLAY_FILENAME}")];
 
     let existing = if gitignore_path.exists() {
         std::fs::read_to_string(&gitignore_path)?
@@ -559,7 +569,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     )?;
 
     // Write .env with shell patterns for detected CLI tools (only if it doesn't exist)
-    let env_path = devcontainer_dir.join(".env");
+    let env_path = env_file_for_project(devcontainer_dir);
     if !env_path.exists() {
         let env_content = generate_env_file(&detected);
         write_file(&env_path, &env_content)?;
@@ -723,7 +733,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
     // Write .env with shell patterns for detected CLI tools
     let detected = detect_cli_tools();
     let env_content = generate_env_file(&detected);
-    write_file(&devcontainer_dir.join(".env"), &env_content)?;
+    write_file(&env_file_for_project(devcontainer_dir), &env_content)?;
 
     // Add overlay to .gitignore
     gitignore_overlay(project)?;
@@ -1166,8 +1176,8 @@ mod tests {
         let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert!(gitignore.contains(OVERLAY_FILENAME));
 
-        // .env should be created
-        assert!(dc.join(".env").exists());
+        // .env should be created in ~/.kap/envs/<project>/
+        assert!(env_file_for_project(&dc).exists());
 
         fs::remove_dir_all(&dir).unwrap();
     }
