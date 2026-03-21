@@ -68,8 +68,11 @@ mode = "direct"
 env = ["TEST_SECRET"]
 TOML
 
-# Provide a test secret for direct-mode CLI proxy testing
-echo "TEST_SECRET=s3cret-from-sidecar" >> "$DC_DIR/.env"
+# Provide a test secret for direct-mode CLI proxy testing.
+# .env lives at ~/.kap/envs/<project-name>/ (project name from devcontainer.json).
+ENV_DIR="$HOME/.kap/envs/kap-integration-test"
+mkdir -p "$ENV_DIR"
+echo "TEST_SECRET=s3cret-from-sidecar" >> "$ENV_DIR/.env"
 
 # Build a minimal app image with git and test tools pre-installed
 docker build -t kap-test-app -f - . <<'DOCKERFILE'
