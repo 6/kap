@@ -6,7 +6,9 @@
 ///   updates devcontainer.json
 use crate::config::ComposeConfig;
 use anyhow::{Context, Result};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::process::Command;
 
 pub const OVERLAY_FILENAME: &str = "docker-compose.kap.yml";
 pub const POST_START_SCRIPT: &str = ".kap-post-start.sh";
@@ -130,11 +132,204 @@ pub fn derive_subnet(project_dir: &Path) -> String {
     format!("172.{second}.{third}")
 }
 
+/// Find two available /24 subnets (sandbox + external), avoiding collisions with
+/// existing Docker networks.
+///
+/// Returns `(sandbox_prefix, external_prefix)` — two consecutive /24 ranges.
+/// Starts with the deterministic hash from `derive_subnet`, then queries Docker
+/// for existing network subnets. If either subnet is taken by another project,
+/// iterates through alternatives until finding a free pair.
+/// Falls back to the derived pair silently if Docker is unavailable.
+pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
+    let preferred = derive_subnet(project_dir);
+    let preferred_ext = next_subnet(&preferred).unwrap_or_else(|| preferred.to_string());
+
+    // Determine our own network names so we can reuse our existing subnets
+    let our_project = crate::container::find_compose_project(project_dir)
+        .or_else(|| crate::container::derive_compose_project(project_dir));
+    let our_networks: HashSet<String> = match &our_project {
+        Some(p) => [format!("{p}_kap_sandbox"), format!("{p}_kap_external")]
+            .into_iter()
+            .collect(),
+        None => HashSet::new(),
+    };
+
+    let existing = query_docker_subnets();
+    if existing.is_empty() {
+        return (preferred, preferred_ext);
+    }
+
+    // Subnets taken by OTHER projects' networks (as /24 prefixes).
+    // For /16 networks like "172.23.0.0/16", we expand to all 256 contained /24 prefixes
+    // so our /24 selection won't land inside a larger block.
+    let taken: HashSet<String> = existing
+        .iter()
+        .filter(|(name, _)| !our_networks.contains(name.as_str()))
+        .flat_map(|(_, cidr)| expand_cidr_to_prefixes(cidr))
+        .collect();
+
+    if !taken.contains(&preferred) && !taken.contains(&preferred_ext) {
+        return (preferred, preferred_ext);
+    }
+
+    // Collision — iterate through alternatives, stepping by 2 for pairs
+    let mut sandbox = preferred.clone();
+    for _ in 0..1792 {
+        sandbox = match next_subnet(&sandbox).and_then(|s| next_subnet(&s)) {
+            Some(c) => c,
+            None => return (preferred, preferred_ext),
+        };
+        let external = match next_subnet(&sandbox) {
+            Some(c) => c,
+            None => return (preferred, preferred_ext),
+        };
+        if !taken.contains(&sandbox) && !taken.contains(&external) {
+            return (sandbox, external);
+        }
+    }
+
+    (preferred, preferred_ext)
+}
+
+/// Advance a subnet prefix to the next /24 in the 172.18-31.x range.
+/// Wraps from 172.31.255 -> 172.18.0.
+fn next_subnet(prefix: &str) -> Option<String> {
+    let parts: Vec<&str> = prefix.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let second: u8 = parts[1].parse().ok()?;
+    let third: u8 = parts[2].parse().ok()?;
+
+    let (new_second, new_third) = if third == 255 {
+        if second >= 31 {
+            (18u8, 0u8)
+        } else {
+            (second + 1, 0u8)
+        }
+    } else {
+        (second, third + 1)
+    };
+    Some(format!("172.{new_second}.{new_third}"))
+}
+
+/// Query Docker for all existing network subnets.
+/// Returns a map of network name -> CIDR string (e.g. "172.28.5.0/24" or "172.23.0.0/16").
+/// Returns an empty map if Docker is unavailable.
+fn query_docker_subnets() -> HashMap<String, String> {
+    let names_output = match Command::new("docker")
+        .args(["network", "ls", "--format", "{{.Name}}"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return HashMap::new(),
+    };
+
+    let network_names: Vec<&str> = std::str::from_utf8(&names_output.stdout)
+        .unwrap_or("")
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if network_names.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "network",
+        "inspect",
+        "--format",
+        r#"{{.Name}}	{{range .IPAM.Config}}{{.Subnet}}{{end}}"#,
+    ]);
+    for name in &network_names {
+        cmd.arg(name);
+    }
+
+    let output = match cmd.output() {
+        Ok(o) if o.status.success() => o,
+        _ => return HashMap::new(),
+    };
+
+    parse_docker_network_subnets(std::str::from_utf8(&output.stdout).unwrap_or(""))
+}
+
+/// Parse `docker network inspect` output into a map of network name -> CIDR.
+/// Input format: "network_name\tcidr\n" per line.
+fn parse_docker_network_subnets(text: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let name = match parts.next() {
+            Some(n) if !n.trim().is_empty() => n.trim(),
+            _ => continue,
+        };
+        let cidr = match parts.next() {
+            Some(c) if !c.trim().is_empty() => c.trim(),
+            _ => continue,
+        };
+        // Validate it looks like a CIDR
+        if cidr.contains('/') && cidr.contains('.') {
+            map.insert(name.to_string(), cidr.to_string());
+        }
+    }
+    map
+}
+
+/// Expand a CIDR to all /24 prefixes it contains (as "172.X.Y" strings).
+/// For a /24 like "172.28.5.0/24", returns just ["172.28.5"].
+/// For a /16 like "172.23.0.0/16", returns ["172.23.0", "172.23.1", ..., "172.23.255"].
+fn expand_cidr_to_prefixes(cidr: &str) -> Vec<String> {
+    let mut parts = cidr.split('/');
+    let addr = match parts.next() {
+        Some(a) => a,
+        None => return vec![],
+    };
+    let mask: u8 = match parts.next().and_then(|m| m.parse().ok()) {
+        Some(m) => m,
+        None => return vec![],
+    };
+    let octets: Vec<u8> = addr.split('.').filter_map(|o| o.parse().ok()).collect();
+    if octets.len() != 4 {
+        return vec![];
+    }
+
+    if mask >= 24 {
+        // Single /24 — return just this prefix
+        vec![format!("{}.{}.{}", octets[0], octets[1], octets[2])]
+    } else if mask >= 16 {
+        // /16 or /17..23 — enumerate all /24 prefixes within
+        let base = u32::from(octets[0]) << 24
+            | u32::from(octets[1]) << 16
+            | u32::from(octets[2]) << 8
+            | u32::from(octets[3]);
+        let host_bits = 32 - mask;
+        let count = 1u32 << host_bits;
+        let network = base & !count.wrapping_sub(1);
+        let mut prefixes = Vec::new();
+        // Step by 256 (one /24 at a time)
+        let mut addr = network;
+        while addr < network + count {
+            let o1 = (addr >> 24) as u8;
+            let o2 = (addr >> 16) as u8;
+            let o3 = (addr >> 8) as u8;
+            prefixes.push(format!("{o1}.{o2}.{o3}"));
+            addr += 256;
+        }
+        prefixes
+    } else {
+        // /15 or smaller — too large, just return the single prefix as best-effort
+        vec![format!("{}.{}.{}", octets[0], octets[1], octets[2])]
+    }
+}
+
 /// Generate the overlay compose YAML for the kap sidecar.
 pub fn generate_overlay(
     service_name: &str,
     compose: &ComposeConfig,
     subnet_prefix: &str,
+    external_prefix: &str,
     project_name: &str,
     ssh_auth_sock: Option<&str>,
     global_config: bool,
@@ -167,7 +362,8 @@ pub fn generate_overlay(
     };
     let app_ip = format!("{subnet_prefix}.2");
     let sidecar_ip = format!("{subnet_prefix}.3");
-    let subnet = format!("{subnet_prefix}.0/24");
+    let sandbox_subnet = format!("{subnet_prefix}.0/24");
+    let external_subnet = format!("{external_prefix}.0/24");
     format!(
         r#"# Generated by kap — DO NOT EDIT. Regenerated on each `kap sidecar-init` run.
 # Adds network isolation, DNS filtering, and MCP proxy.
@@ -230,9 +426,12 @@ networks:
     internal: true  # no default gateway, no route to internet
     ipam:
       config:
-        - subnet: {subnet}
+        - subnet: {sandbox_subnet}
   kap_external:
     driver: bridge
+    ipam:
+      config:
+        - subnet: {external_subnet}
 "#
     )
 }
@@ -552,7 +751,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     // Generate overlay (using default ComposeConfig — user can customize in kap.toml later)
     let overlay_path = devcontainer_dir.join(OVERLAY_FILENAME);
     let compose_config = ComposeConfig::default();
-    let subnet_prefix = derive_subnet(project);
+    let (sandbox_prefix, external_prefix) = find_available_subnets(project);
     let project_name = read_project_name(devcontainer_dir);
     let ssh_auth_sock = detect_ssh_auth_sock();
     let global_config = crate::config::has_global_config();
@@ -561,7 +760,8 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
         &generate_overlay(
             &service_name,
             &compose_config,
-            &subnet_prefix,
+            &sandbox_prefix,
+            &external_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
             global_config,
@@ -715,7 +915,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
 
     // Generate the overlay so things work immediately
     let compose_config = ComposeConfig::default();
-    let subnet_prefix = derive_subnet(project);
+    let (sandbox_prefix, external_prefix) = find_available_subnets(project);
     let ssh_auth_sock = detect_ssh_auth_sock();
     let global_config = crate::config::has_global_config();
     write_file(
@@ -723,7 +923,8 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
         &generate_overlay(
             "app",
             &compose_config,
-            &subnet_prefix,
+            &sandbox_prefix,
+            &external_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
             global_config,
@@ -1379,7 +1580,15 @@ mod tests {
                 target: Some("proxy".to_string()),
             }),
         };
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test-project", None, false);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.28.0",
+            "172.28.1",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("build:"));
         assert!(overlay.contains("context: .."));
         assert!(overlay.contains("dockerfile: .devcontainer/Dockerfile"));
@@ -1390,7 +1599,15 @@ mod tests {
     #[test]
     fn overlay_with_default_image() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test-project", None, false);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.28.0",
+            "172.28.1",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
         assert!(!overlay.contains("build:"));
     }
@@ -1398,7 +1615,15 @@ mod tests {
     #[test]
     fn overlay_includes_proxy_logs_volume() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test-project", None, false);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.28.0",
+            "172.28.1",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("proxy-logs:/var/log/kap"));
         assert!(overlay.contains("volumes:\n  proxy-logs:"));
     }
@@ -1468,12 +1693,110 @@ mod tests {
     }
 
     #[test]
+    fn next_subnet_increments_third_octet() {
+        assert_eq!(next_subnet("172.18.0"), Some("172.18.1".to_string()));
+        assert_eq!(next_subnet("172.28.100"), Some("172.28.101".to_string()));
+    }
+
+    #[test]
+    fn next_subnet_rolls_over_to_next_second_octet() {
+        assert_eq!(next_subnet("172.18.255"), Some("172.19.0".to_string()));
+        assert_eq!(next_subnet("172.30.255"), Some("172.31.0".to_string()));
+    }
+
+    #[test]
+    fn next_subnet_wraps_at_end_of_range() {
+        assert_eq!(next_subnet("172.31.255"), Some("172.18.0".to_string()));
+    }
+
+    #[test]
+    fn next_subnet_invalid_input() {
+        assert_eq!(next_subnet("invalid"), None);
+        assert_eq!(next_subnet("172.18"), None);
+    }
+
+    #[test]
+    fn parse_docker_network_subnets_basic() {
+        let input = "myproject_devcontainer_kap_sandbox\t172.28.5.0/24\n\
+                     other_devcontainer_kap_sandbox\t172.28.10.0/24\n";
+        let map = parse_docker_network_subnets(input);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["myproject_devcontainer_kap_sandbox"], "172.28.5.0/24");
+        assert_eq!(map["other_devcontainer_kap_sandbox"], "172.28.10.0/24");
+    }
+
+    #[test]
+    fn parse_docker_network_subnets_empty() {
+        assert!(parse_docker_network_subnets("").is_empty());
+    }
+
+    #[test]
+    fn parse_docker_network_subnets_ignores_malformed() {
+        let input = "just-a-name\n\
+                     valid\t172.18.0.0/24\n";
+        let map = parse_docker_network_subnets(input);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["valid"], "172.18.0.0/24");
+    }
+
+    #[test]
+    fn expand_cidr_single_24() {
+        let prefixes = expand_cidr_to_prefixes("172.28.5.0/24");
+        assert_eq!(prefixes, vec!["172.28.5"]);
+    }
+
+    #[test]
+    fn expand_cidr_16_covers_all_24s() {
+        let prefixes = expand_cidr_to_prefixes("172.23.0.0/16");
+        assert_eq!(prefixes.len(), 256);
+        assert_eq!(prefixes[0], "172.23.0");
+        assert_eq!(prefixes[255], "172.23.255");
+    }
+
+    #[test]
+    fn expand_cidr_invalid() {
+        assert!(expand_cidr_to_prefixes("").is_empty());
+        assert!(expand_cidr_to_prefixes("not-cidr").is_empty());
+    }
+
+    #[test]
+    fn collision_avoidance_skips_taken_subnets() {
+        // Simulate: sandbox needs pair (X, X+1), both free
+        let taken: HashSet<String> = ["172.28.5", "172.28.6", "172.28.7"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        // Starting from 172.28.4, pair is (172.28.4, 172.28.5) — 5 is taken
+        // Next pair: (172.28.6, 172.28.7) — both taken
+        // Next pair: (172.28.8, 172.28.9) — both free
+        let mut sandbox = "172.28.4".to_string();
+        let result = loop {
+            sandbox = next_subnet(&sandbox).and_then(|s| next_subnet(&s)).unwrap();
+            let external = next_subnet(&sandbox).unwrap();
+            if !taken.contains(&sandbox) && !taken.contains(&external) {
+                break (sandbox, external);
+            }
+        };
+        assert_eq!(result, ("172.28.8".to_string(), "172.28.9".to_string()));
+    }
+
+    #[test]
     fn overlay_uses_custom_subnet() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.25.42", "test-project", None, false);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.25.42",
+            "172.25.43",
+            "test-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("172.25.42.2")); // app IP
         assert!(overlay.contains("172.25.42.3")); // sidecar IP
-        assert!(overlay.contains("172.25.42.0/24")); // subnet
+        assert!(overlay.contains("172.25.42.0/24")); // sandbox subnet
+        assert!(overlay.contains("172.25.43.0/24")); // external subnet
         assert!(!overlay.contains("172.28.0")); // no old default
         assert!(overlay.contains("hostname: test-project"));
     }
@@ -1549,7 +1872,8 @@ mod tests {
     #[test]
     fn overlay_mounts_kap_bin_and_shims_when_tools_configured() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test", None, false);
+        let overlay =
+            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
         // kap-bin volume always mounted (shims written by sidecar at runtime)
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
         // No configs: section — shims are managed via write_shims + remoteEnv.PATH
@@ -1560,7 +1884,15 @@ mod tests {
     #[test]
     fn overlay_contains_hostname() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "my-project", None, false);
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.28.0",
+            "172.28.1",
+            "my-project",
+            None,
+            false,
+        );
         assert!(overlay.contains("hostname: my-project"));
     }
 
@@ -1571,6 +1903,7 @@ mod tests {
             "app",
             &compose,
             "172.28.0",
+            "172.28.1",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
             false,
@@ -1584,7 +1917,8 @@ mod tests {
     #[test]
     fn overlay_omits_ssh_agent_when_unset() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test", None, false);
+        let overlay =
+            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
         assert!(!overlay.contains("ssh-agent"));
         assert!(!overlay.contains("SSH_AUTH_SOCK"));
     }
@@ -1596,6 +1930,7 @@ mod tests {
             "app",
             &compose,
             "172.28.0",
+            "172.28.1",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
             false,
@@ -1608,14 +1943,15 @@ mod tests {
     #[test]
     fn overlay_includes_global_config_mount() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test", None, true);
+        let overlay = generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, true);
         assert!(overlay.contains("/.kap/kap.toml:/etc/kap/global.toml:ro"));
     }
 
     #[test]
     fn overlay_omits_global_config_when_disabled() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "test", None, false);
+        let overlay =
+            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
         assert!(!overlay.contains("global.toml"));
     }
 

@@ -117,7 +117,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
 
     // Derive project root from devcontainer_dir (parent of .devcontainer/)
     let project_dir = devcontainer_dir.parent().unwrap_or(devcontainer_dir);
-    let subnet_prefix = crate::init::derive_subnet(project_dir);
+    let (sandbox_prefix, external_prefix) = crate::init::find_available_subnets(project_dir);
     let project_name = crate::init::read_project_name(devcontainer_dir);
     let ssh_auth_sock = if config.ssh_agent {
         crate::init::detect_ssh_auth_sock()
@@ -128,7 +128,8 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     let overlay = crate::init::generate_overlay(
         &service_name,
         &compose_config,
-        &subnet_prefix,
+        &sandbox_prefix,
+        &external_prefix,
         &project_name,
         ssh_auth_sock.as_deref(),
         global_config,
