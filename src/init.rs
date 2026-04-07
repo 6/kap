@@ -135,9 +135,7 @@ pub fn derive_subnet(project_dir: &Path) -> String {
 /// Read the sandbox and external subnet prefixes from an existing overlay file.
 /// Returns `None` if the file doesn't exist or can't be parsed.
 fn read_overlay_subnets(project_dir: &Path) -> Option<(String, String)> {
-    let overlay_path = project_dir
-        .join(".devcontainer")
-        .join(OVERLAY_FILENAME);
+    let overlay_path = project_dir.join(".devcontainer").join(OVERLAY_FILENAME);
     let content = std::fs::read_to_string(overlay_path).ok()?;
 
     let mut sandbox = None;
