@@ -132,6 +132,68 @@ pub fn derive_subnet(project_dir: &Path) -> String {
     format!("172.{second}.{third}")
 }
 
+/// Read the sandbox and external subnet prefixes from an existing overlay file.
+/// Returns `None` if the file doesn't exist or can't be parsed.
+fn read_overlay_subnets(project_dir: &Path) -> Option<(String, String)> {
+    let overlay_path = project_dir
+        .join(".devcontainer")
+        .join(OVERLAY_FILENAME);
+    let content = std::fs::read_to_string(overlay_path).ok()?;
+
+    let mut sandbox = None;
+    let mut external = None;
+    let mut in_sandbox = false;
+    let mut in_external = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Detect network section headers (e.g. "kap_sandbox:" or "kap_external:")
+        if trimmed == "kap_sandbox:" {
+            in_sandbox = true;
+            in_external = false;
+            continue;
+        }
+        if trimmed == "kap_external:" {
+            in_external = true;
+            in_sandbox = false;
+            continue;
+        }
+        // A new top-level key ends the current section
+        if !line.starts_with(' ') && !line.is_empty() && !trimmed.starts_with('#') {
+            in_sandbox = false;
+            in_external = false;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("- subnet:") {
+            // Parse "172.31.240.0/24" -> "172.31.240"
+            let cidr = rest.trim().trim_matches('"');
+            if let Some(prefix) = cidr_to_prefix(cidr) {
+                if in_sandbox {
+                    sandbox = Some(prefix);
+                } else if in_external {
+                    external = Some(prefix);
+                }
+            }
+        }
+    }
+
+    match (sandbox, external) {
+        (Some(sb), Some(ext)) => Some((sb, ext)),
+        _ => None,
+    }
+}
+
+/// Extract the /24 prefix from a CIDR string (e.g. "172.31.240.0/24" -> "172.31.240").
+fn cidr_to_prefix(cidr: &str) -> Option<String> {
+    let addr = cidr.split('/').next()?;
+    let octets: Vec<&str> = addr.split('.').collect();
+    if octets.len() == 4 {
+        Some(format!("{}.{}.{}", octets[0], octets[1], octets[2]))
+    } else {
+        None
+    }
+}
+
 /// Find two available /24 subnets (sandbox + external), avoiding collisions with
 /// existing Docker networks.
 ///
@@ -156,6 +218,13 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
 
     let existing = query_docker_subnets();
     if existing.is_empty() {
+        // No Docker networks at all — prefer the overlay's existing subnet
+        // to avoid changing IPs after a Docker restart (containers survive
+        // but networks don't, so collision avoidance can pick a different
+        // subnet, leaving existing containers with stale env vars).
+        if let Some((sb, ext)) = read_overlay_subnets(project_dir) {
+            return (sb, ext);
+        }
         return (preferred, preferred_ext);
     }
 
@@ -167,6 +236,14 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
         .filter(|(name, _)| !our_networks.contains(name.as_str()))
         .flat_map(|(_, cidr)| expand_cidr_to_prefixes(cidr))
         .collect();
+
+    // Prefer the subnet already in the overlay file to avoid IP drift after
+    // Docker restarts. Only fall through if it's now taken by another project.
+    if let Some((sb, ext)) = read_overlay_subnets(project_dir) {
+        if !taken.contains(&sb) && !taken.contains(&ext) {
+            return (sb, ext);
+        }
+    }
 
     if !taken.contains(&preferred) && !taken.contains(&preferred_ext) {
         return (preferred, preferred_ext);
@@ -1779,6 +1856,51 @@ mod tests {
             }
         };
         assert_eq!(result, ("172.28.8".to_string(), "172.28.9".to_string()));
+    }
+
+    #[test]
+    fn cidr_to_prefix_valid() {
+        assert_eq!(cidr_to_prefix("172.31.240.0/24"), Some("172.31.240".into()));
+        assert_eq!(cidr_to_prefix("172.18.0.0/16"), Some("172.18.0".into()));
+    }
+
+    #[test]
+    fn cidr_to_prefix_invalid() {
+        assert_eq!(cidr_to_prefix("invalid"), None);
+        assert_eq!(cidr_to_prefix("172.18.0"), None); // only 3 octets
+    }
+
+    #[test]
+    fn read_overlay_subnets_parses_existing_overlay() {
+        let dir = tempdir("overlay-subnets");
+        let dc = dir.join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+
+        let overlay = generate_overlay(
+            "app",
+            &ComposeConfig::default(),
+            "172.31.242",
+            "172.31.243",
+            "test",
+            None,
+            false,
+        );
+        fs::write(dc.join(OVERLAY_FILENAME), &overlay).unwrap();
+
+        let result = read_overlay_subnets(&dir);
+        assert_eq!(
+            result,
+            Some(("172.31.242".to_string(), "172.31.243".to_string()))
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_overlay_subnets_returns_none_when_missing() {
+        let dir = tempdir("overlay-subnets-missing");
+        assert_eq!(read_overlay_subnets(&dir), None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
