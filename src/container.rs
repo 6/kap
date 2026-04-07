@@ -65,15 +65,31 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
     require_devcontainer()?;
     let workspace = resolve_workspace_folder(workspace)?;
 
-    // On --reset, pull the latest sidecar image so we don't reuse a stale cache.
-    if reset && let Some(image) = sidecar_image_at(&workspace) {
-        eprintln!("Pulling {image}...");
-        let _ = Command::new("docker")
-            .args(["pull", &image])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status();
+    if reset {
+        // Tear down containers AND networks before recreating. devcontainer's
+        // --remove-existing-container only removes the container, leaving stale
+        // networks behind. After a Docker restart those networks can have
+        // broken state ("Address already in use") that blocks `up`.
+        if let Some(project) =
+            find_compose_project(&workspace).or_else(|| derive_compose_project(&workspace))
+        {
+            let _ = Command::new("docker")
+                .args(["compose", "-p", &project, "down"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        // Pull the latest sidecar image so we don't reuse a stale cache.
+        if let Some(image) = sidecar_image_at(&workspace) {
+            eprintln!("Pulling {image}...");
+            let _ = Command::new("docker")
+                .args(["pull", &image])
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status();
+        }
     }
 
     let mut cmd = Command::new("devcontainer");

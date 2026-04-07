@@ -237,10 +237,11 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
 
     // Prefer the subnet already in the overlay file to avoid IP drift after
     // Docker restarts. Only fall through if it's now taken by another project.
-    if let Some((sb, ext)) = read_overlay_subnets(project_dir) {
-        if !taken.contains(&sb) && !taken.contains(&ext) {
-            return (sb, ext);
-        }
+    if let Some((sb, ext)) = read_overlay_subnets(project_dir)
+        && !taken.contains(&sb)
+        && !taken.contains(&ext)
+    {
+        return (sb, ext);
     }
 
     if !taken.contains(&preferred) && !taken.contains(&preferred_ext) {
