@@ -1987,6 +1987,60 @@ mod tests {
     }
 
     #[test]
+    fn select_subnets_requires_project_name_to_match_docker() {
+        // If our_project is None (e.g. because a relative path like "."
+        // couldn't be resolved), the Docker network check is skipped and
+        // we fall back to the stale overlay — reproducing the drift bug.
+        let mut existing = HashMap::new();
+        existing.insert(
+            "myproject_devcontainer_kap_sandbox".to_string(),
+            "172.28.20.0/24".to_string(),
+        );
+        existing.insert(
+            "myproject_devcontainer_kap_external".to_string(),
+            "172.28.21.0/24".to_string(),
+        );
+
+        // With our_project = None, Docker networks are ignored → returns overlay
+        let result = select_subnets(
+            "172.28.10",
+            "172.28.11",
+            None, // <-- bug: unresolved path leads to None project
+            &existing,
+            Some(("172.28.10".into(), "172.28.11".into())),
+        );
+        assert_eq!(
+            result,
+            ("172.28.10".to_string(), "172.28.11".to_string()),
+            "with no project, falls back to overlay (the buggy path)"
+        );
+
+        // With our_project resolved, Docker networks win
+        let result = select_subnets(
+            "172.28.10",
+            "172.28.11",
+            Some("myproject_devcontainer"),
+            &existing,
+            Some(("172.28.10".into(), "172.28.11".into())),
+        );
+        assert_eq!(
+            result,
+            ("172.28.20".to_string(), "172.28.21".to_string()),
+            "with project resolved, Docker reality wins"
+        );
+    }
+
+    #[test]
+    fn derive_compose_project_from_relative_dot_returns_none() {
+        // "." has no file_name component, so derive_compose_project returns None.
+        // This is why canonicalization in find_available_subnets matters.
+        assert_eq!(
+            crate::container::derive_compose_project(Path::new(".")),
+            None
+        );
+    }
+
+    #[test]
     fn cidr_to_prefix_valid() {
         assert_eq!(cidr_to_prefix("172.31.240.0/24"), Some("172.31.240".into()));
         assert_eq!(cidr_to_prefix("172.18.0.0/16"), Some("172.18.0".into()));

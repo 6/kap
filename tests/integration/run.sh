@@ -265,24 +265,32 @@ fi
 echo ""
 echo "--- Subnet drift ---"
 
-echo "[19] Overlay subnet matches actual Docker network after sidecar-init"
-# Simulate the drift scenario: sidecar-init regenerates the overlay while
-# Docker networks already exist with specific subnets. The overlay must
-# use the actual network subnets, not stale/recomputed ones.
+echo "[19] sidecar-init recovers from stale overlay subnets"
+# Simulate the drift scenario: the overlay has wrong subnets (e.g. from a
+# previous bug or Docker recreating networks with different IPs). sidecar-init
+# must detect the actual Docker network subnets and overwrite the stale overlay.
 SANDBOX_NET="kap-integration_kap_sandbox"
 ACTUAL_SUBNET=$(docker network inspect "$SANDBOX_NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "")
 if [ -z "$ACTUAL_SUBNET" ]; then
   fail "could not inspect $SANDBOX_NET"
 else
-  # Re-run sidecar-init (regenerates the overlay)
-  (cd "$SCRIPT_DIR/project" && kap sidecar-init) >/dev/null 2>&1
-  # Read the sandbox subnet from the freshly generated overlay
-  OVERLAY_SUBNET=$(grep -A2 'kap_sandbox:' "$DC_DIR/docker-compose.kap.yml" | grep 'subnet:' | head -1 | awk '{print $NF}')
-  if [ "$OVERLAY_SUBNET" = "$ACTUAL_SUBNET" ]; then
-    pass "overlay subnet ($OVERLAY_SUBNET) matches Docker network"
+  # Corrupt the overlay with wrong subnets
+  OVERLAY="$DC_DIR/docker-compose.kap.yml"
+  sed -i.bak 's|subnet: '"$ACTUAL_SUBNET"'|subnet: 172.18.99.0/24|' "$OVERLAY"
+  CORRUPTED=$(grep -c '172.18.99.0/24' "$OVERLAY")
+  if [ "$CORRUPTED" -eq 0 ]; then
+    fail "failed to corrupt overlay for drift test"
   else
-    fail "overlay subnet ($OVERLAY_SUBNET) != Docker network ($ACTUAL_SUBNET)"
+    # Re-run sidecar-init — it should read Docker networks and fix the overlay
+    (cd "$SCRIPT_DIR/project" && kap sidecar-init) >/dev/null 2>&1
+    OVERLAY_SUBNET=$(grep -A2 'kap_sandbox:' "$OVERLAY" | grep 'subnet:' | head -1 | awk '{print $NF}')
+    if [ "$OVERLAY_SUBNET" = "$ACTUAL_SUBNET" ]; then
+      pass "overlay recovered to $ACTUAL_SUBNET after drift"
+    else
+      fail "overlay still wrong ($OVERLAY_SUBNET) after sidecar-init, expected $ACTUAL_SUBNET"
+    fi
   fi
+  rm -f "$OVERLAY.bak"
 fi
 
 # --- Summary ---
