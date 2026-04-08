@@ -403,10 +403,12 @@ pub fn write_gitconfig(cfg: &Config, shim_dir: &Path) -> anyhow::Result<()> {
     let content = if cfg.ssh_signing {
         // Override gpg.ssh.program (the host's macOS binary doesn't exist in Linux).
         // ~/.gitconfig-kap is written by the post-start script with user.signingkey.
-        "[include]\n    path = ~/.gitconfig\n[include]\n    path = ~/.gitconfig-kap\n[gpg \"ssh\"]\n    program = /usr/bin/ssh-keygen\n"
+        // /opt/kap-host-gitconfig is bind-mounted from the host's ~/.gitconfig by the
+        // overlay (provides user.name, user.email, etc.). Falls back silently if not mounted.
+        "[include]\n    path = /opt/kap-host-gitconfig\n[include]\n    path = ~/.gitconfig-kap\n[gpg \"ssh\"]\n    program = /usr/bin/ssh-keygen\n"
     } else {
         // Passthrough: ~/.gitconfig-kap may disable signing if the program is missing.
-        "[include]\n    path = ~/.gitconfig\n[include]\n    path = ~/.gitconfig-kap\n"
+        "[include]\n    path = /opt/kap-host-gitconfig\n[include]\n    path = ~/.gitconfig-kap\n"
     };
     let needs_write = std::fs::read_to_string(&path)
         .map(|existing| existing != content)
@@ -888,7 +890,7 @@ claude_code = true
 
         // Written to parent of shim_dir (volume root)
         let content = std::fs::read_to_string(dir.join(GITCONFIG_FILENAME)).unwrap();
-        assert!(content.contains("[include]\n    path = ~/.gitconfig"));
+        assert!(content.contains("[include]\n    path = /opt/kap-host-gitconfig"));
         assert!(content.contains("[include]\n    path = ~/.gitconfig-kap"));
         assert!(content.contains("program = /usr/bin/ssh-keygen"));
 
@@ -905,7 +907,7 @@ claude_code = true
         write_gitconfig(&cfg, &bin).unwrap();
 
         let content = std::fs::read_to_string(dir.join(GITCONFIG_FILENAME)).unwrap();
-        assert!(content.contains("[include]\n    path = ~/.gitconfig"));
+        assert!(content.contains("[include]\n    path = /opt/kap-host-gitconfig"));
         assert!(content.contains("[include]\n    path = ~/.gitconfig-kap"));
         assert!(!content.contains("ssh-keygen"));
 

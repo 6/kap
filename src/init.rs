@@ -400,7 +400,26 @@ fn expand_cidr_to_prefixes(cidr: &str) -> Vec<String> {
     }
 }
 
+/// Detect the host's `~/.gitconfig` for bind-mounting into the container.
+///
+/// The devcontainer CLI normally auto-copies `~/.gitconfig`, but when
+/// `GIT_CONFIG_GLOBAL` is set (as kap does), it skips the copy. We mount
+/// the file ourselves so the kap gitconfig wrapper can include it.
+pub fn detect_host_gitconfig() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(&home).join(".gitconfig");
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// Mount path for the host's gitconfig inside the app container.
+const HOST_GITCONFIG_MOUNT: &str = "/opt/kap-host-gitconfig";
+
 /// Generate the overlay compose YAML for the kap sidecar.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_overlay(
     service_name: &str,
     compose: &ComposeConfig,
@@ -408,15 +427,20 @@ pub fn generate_overlay(
     external_prefix: &str,
     project_name: &str,
     ssh_auth_sock: Option<&str>,
+    host_gitconfig: Option<&str>,
     global_config: bool,
 ) -> String {
     let image_yaml = compose.image_yaml("    ");
 
-    // App service volumes: kap-bin (for shims + kap binary) + SSH agent socket
+    // App service volumes: kap-bin (for shims + kap binary), SSH agent socket,
+    // and host gitconfig (so the container has user.name, user.email, etc.)
     let app_volumes = {
         let mut entries: Vec<String> = vec!["      - kap-bin:/opt/kap:ro".to_string()];
         if let Some(sock) = ssh_auth_sock {
             entries.push(format!("      - {sock}:/ssh-agent"));
+        }
+        if let Some(gitconfig) = host_gitconfig {
+            entries.push(format!("      - {gitconfig}:{HOST_GITCONFIG_MOUNT}:ro"));
         }
         format!("\n    volumes:\n{}", entries.join("\n"))
     };
@@ -830,6 +854,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
     let (sandbox_prefix, external_prefix) = find_available_subnets(project);
     let project_name = read_project_name(devcontainer_dir);
     let ssh_auth_sock = detect_ssh_auth_sock();
+    let host_gitconfig = detect_host_gitconfig();
     let global_config = crate::config::has_global_config();
     write_file(
         &overlay_path,
@@ -840,6 +865,7 @@ fn run_existing(project: &Path, devcontainer_dir: &Path, yes: bool, force: bool)
             &external_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
+            host_gitconfig.as_deref(),
             global_config,
         ),
     )?;
@@ -993,6 +1019,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
     let compose_config = ComposeConfig::default();
     let (sandbox_prefix, external_prefix) = find_available_subnets(project);
     let ssh_auth_sock = detect_ssh_auth_sock();
+    let host_gitconfig = detect_host_gitconfig();
     let global_config = crate::config::has_global_config();
     write_file(
         &devcontainer_dir.join(OVERLAY_FILENAME),
@@ -1003,6 +1030,7 @@ fn run_new(project: &Path, devcontainer_dir: &Path, yes: bool) -> Result<()> {
             &external_prefix,
             &project_name,
             ssh_auth_sock.as_deref(),
+            host_gitconfig.as_deref(),
             global_config,
         ),
     )?;
@@ -1663,6 +1691,7 @@ mod tests {
             "172.28.1",
             "test-project",
             None,
+            None,
             false,
         );
         assert!(overlay.contains("build:"));
@@ -1682,6 +1711,7 @@ mod tests {
             "172.28.1",
             "test-project",
             None,
+            None,
             false,
         );
         assert!(overlay.contains("image: ghcr.io/6/kap:latest"));
@@ -1697,6 +1727,7 @@ mod tests {
             "172.28.0",
             "172.28.1",
             "test-project",
+            None,
             None,
             false,
         );
@@ -1882,6 +1913,7 @@ mod tests {
             "172.31.243",
             "test",
             None,
+            None,
             false,
         );
         fs::write(dc.join(OVERLAY_FILENAME), &overlay).unwrap();
@@ -1911,6 +1943,7 @@ mod tests {
             "172.25.42",
             "172.25.43",
             "test-project",
+            None,
             None,
             false,
         );
@@ -1993,8 +2026,9 @@ mod tests {
     #[test]
     fn overlay_mounts_kap_bin_and_shims_when_tools_configured() {
         let compose = ComposeConfig::default();
-        let overlay =
-            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
+        let overlay = generate_overlay(
+            "app", &compose, "172.28.0", "172.28.1", "test", None, None, false,
+        );
         // kap-bin volume always mounted (shims written by sidecar at runtime)
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
         // No configs: section — shims are managed via write_shims + remoteEnv.PATH
@@ -2012,6 +2046,7 @@ mod tests {
             "172.28.1",
             "my-project",
             None,
+            None,
             false,
         );
         assert!(overlay.contains("hostname: my-project"));
@@ -2027,6 +2062,7 @@ mod tests {
             "172.28.1",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
+            None,
             false,
         );
         assert!(overlay.contains("/run/host-services/ssh-auth.sock:/ssh-agent"));
@@ -2038,8 +2074,9 @@ mod tests {
     #[test]
     fn overlay_omits_ssh_agent_when_unset() {
         let compose = ComposeConfig::default();
-        let overlay =
-            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
+        let overlay = generate_overlay(
+            "app", &compose, "172.28.0", "172.28.1", "test", None, None, false,
+        );
         assert!(!overlay.contains("ssh-agent"));
         assert!(!overlay.contains("SSH_AUTH_SOCK"));
     }
@@ -2054,6 +2091,7 @@ mod tests {
             "172.28.1",
             "test",
             Some("/run/host-services/ssh-auth.sock"),
+            None,
             false,
         );
         assert!(overlay.contains("kap-bin:/opt/kap:ro"));
@@ -2064,16 +2102,44 @@ mod tests {
     #[test]
     fn overlay_includes_global_config_mount() {
         let compose = ComposeConfig::default();
-        let overlay = generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, true);
+        let overlay = generate_overlay(
+            "app", &compose, "172.28.0", "172.28.1", "test", None, None, true,
+        );
         assert!(overlay.contains("/.kap/kap.toml:/etc/kap/global.toml:ro"));
     }
 
     #[test]
     fn overlay_omits_global_config_when_disabled() {
         let compose = ComposeConfig::default();
-        let overlay =
-            generate_overlay("app", &compose, "172.28.0", "172.28.1", "test", None, false);
+        let overlay = generate_overlay(
+            "app", &compose, "172.28.0", "172.28.1", "test", None, None, false,
+        );
         assert!(!overlay.contains("global.toml"));
+    }
+
+    #[test]
+    fn overlay_includes_host_gitconfig_when_set() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay(
+            "app",
+            &compose,
+            "172.28.0",
+            "172.28.1",
+            "test",
+            None,
+            Some("/Users/me/.gitconfig"),
+            false,
+        );
+        assert!(overlay.contains("/Users/me/.gitconfig:/opt/kap-host-gitconfig:ro"));
+    }
+
+    #[test]
+    fn overlay_omits_host_gitconfig_when_unset() {
+        let compose = ComposeConfig::default();
+        let overlay = generate_overlay(
+            "app", &compose, "172.28.0", "172.28.1", "test", None, None, false,
+        );
+        assert!(!overlay.contains("kap-host-gitconfig"));
     }
 
     #[test]

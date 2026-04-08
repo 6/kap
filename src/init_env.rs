@@ -124,6 +124,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
     } else {
         None
     };
+    let host_gitconfig = crate::init::detect_host_gitconfig();
     let global_config = crate::config::has_global_config();
     let overlay = crate::init::generate_overlay(
         &service_name,
@@ -132,6 +133,7 @@ fn regenerate_overlay(devcontainer_dir: &Path, config_path: &Path) -> Result<()>
         &external_prefix,
         &project_name,
         ssh_auth_sock.as_deref(),
+        host_gitconfig.as_deref(),
         global_config,
     );
     std::fs::write(&overlay_path, &overlay)

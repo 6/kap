@@ -21,7 +21,7 @@ echo "[build] cached Linux binary at ~/.kap/dev/kap-linux"
 DEPLOYED=0
 for sidecar in $(docker ps | awk 'NR>1 {print $NF}' | grep -E 'kap-kap|-kap-1$'); do
   echo "[build] deploying to $sidecar..."
-  docker cp ~/.kap/dev/kap-linux "$sidecar:/usr/local/bin/kap"
+  docker cp ~/.kap/dev/kap-linux "$sidecar:/opt/kap/kap"
   docker restart "$sidecar"
   DEPLOYED=$((DEPLOYED + 1))
 done
