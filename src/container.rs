@@ -114,7 +114,7 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
     }
 
     // Clear proxy logs on reset (the volume persists across container recreates)
-    if reset && let Some(sidecar) = find_sidecar() {
+    if reset && let Some(sidecar) = find_sidecar_for(&workspace) {
         let _ = Command::new("docker")
             .args(["exec", &sidecar, "sh", "-c", "rm -f /var/log/kap/*.jsonl"])
             .stdout(Stdio::null())
@@ -128,7 +128,7 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
     // published image.
     let dev_binary = crate::dev::cached_binary_path();
     let dev_deployed = dev_binary.exists()
-        && find_sidecar().is_some_and(|sidecar| {
+        && find_sidecar_for(&workspace).is_some_and(|sidecar| {
             eprintln!("[dev] deploying cached binary to sidecar...");
             crate::dev::deploy_to_sidecars(&dev_binary, &[sidecar]);
             true
@@ -137,7 +137,7 @@ pub fn up(workspace: Option<&Path>, reset: bool) -> Result<()> {
     // Wait for the sidecar to become healthy before running status checks.
     // The sidecar writes CLI shims on startup; without this wait, `which <tool>`
     // fails because the shim hasn't been written to the shared volume yet.
-    if let Some(sidecar) = find_sidecar() {
+    if let Some(sidecar) = find_sidecar_for(&workspace) {
         for _ in 0..15 {
             let output = Command::new("docker")
                 .args(["inspect", "--format", "{{.State.Health.Status}}", &sidecar])
@@ -441,10 +441,22 @@ fn resolve_workspace(project_name: &str) -> Result<PathBuf> {
         })
 }
 
-/// Find the kap sidecar container name from running containers.
-fn find_sidecar() -> Option<String> {
+/// Find the kap sidecar container name for a specific workspace.
+///
+/// Filters by compose project label so we don't accidentally pick up a
+/// sidecar from a different devcontainer when multiple are running.
+fn find_sidecar_for(workspace: &Path) -> Option<String> {
+    // Try to find the compose project from running containers, fall back to
+    // deriving it from the directory name.
+    let project = find_compose_project(workspace).or_else(|| derive_compose_project(workspace))?;
     let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}"])
+        .args([
+            "ps",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--format",
+            "{{.Names}}",
+        ])
         .output()
         .ok()?;
     let names = String::from_utf8_lossy(&output.stdout);
