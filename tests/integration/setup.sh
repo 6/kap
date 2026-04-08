@@ -90,8 +90,8 @@ services:
     command: sleep infinity
     volumes:
       - ..:/workspace
-      # Mount the test gitconfig as ~/.gitconfig (simulates devcontainer CLI copy)
-      - $SCRIPT_DIR/test-gitconfig:/root/.gitconfig:ro
+      # Mount the test gitconfig where kap's gitconfig wrapper includes it from
+      - $SCRIPT_DIR/test-gitconfig:/opt/kap-host-gitconfig:ro
 YAML
 
 cat > "$DC_DIR/devcontainer.json" <<'JSON'
