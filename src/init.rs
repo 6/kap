@@ -204,8 +204,11 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
     let preferred = derive_subnet(project_dir);
     let preferred_ext = next_subnet(&preferred).unwrap_or_else(|| preferred.to_string());
 
-    let our_project = crate::container::find_compose_project(project_dir)
-        .or_else(|| crate::container::derive_compose_project(project_dir));
+    // Canonicalize to absolute path — Docker labels store absolute paths,
+    // so find_compose_project("." ) won't match anything.
+    let abs_dir = std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+    let our_project = crate::container::find_compose_project(&abs_dir)
+        .or_else(|| crate::container::derive_compose_project(&abs_dir));
 
     let existing = query_docker_subnets();
     let overlay = read_overlay_subnets(project_dir);
