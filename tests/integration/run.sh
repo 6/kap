@@ -261,6 +261,30 @@ else
   fail "kap binary missing"
 fi
 
+# --- Subnet drift ---
+echo ""
+echo "--- Subnet drift ---"
+
+echo "[19] Overlay subnet matches actual Docker network after sidecar-init"
+# Simulate the drift scenario: sidecar-init regenerates the overlay while
+# Docker networks already exist with specific subnets. The overlay must
+# use the actual network subnets, not stale/recomputed ones.
+SANDBOX_NET="kap-integration_kap_sandbox"
+ACTUAL_SUBNET=$(docker network inspect "$SANDBOX_NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "")
+if [ -z "$ACTUAL_SUBNET" ]; then
+  fail "could not inspect $SANDBOX_NET"
+else
+  # Re-run sidecar-init (regenerates the overlay)
+  (cd "$SCRIPT_DIR/project" && kap sidecar-init) >/dev/null 2>&1
+  # Read the sandbox subnet from the freshly generated overlay
+  OVERLAY_SUBNET=$(grep -A2 'kap_sandbox:' "$DC_DIR/docker-compose.kap.yml" | grep 'subnet:' | head -1 | awk '{print $NF}')
+  if [ "$OVERLAY_SUBNET" = "$ACTUAL_SUBNET" ]; then
+    pass "overlay subnet ($OVERLAY_SUBNET) matches Docker network"
+  else
+    fail "overlay subnet ($OVERLAY_SUBNET) != Docker network ($ACTUAL_SUBNET)"
+  fi
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

@@ -204,26 +204,64 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
     let preferred = derive_subnet(project_dir);
     let preferred_ext = next_subnet(&preferred).unwrap_or_else(|| preferred.to_string());
 
-    // Determine our own network names so we can reuse our existing subnets
     let our_project = crate::container::find_compose_project(project_dir)
         .or_else(|| crate::container::derive_compose_project(project_dir));
-    let our_networks: HashSet<String> = match &our_project {
+
+    let existing = query_docker_subnets();
+    let overlay = read_overlay_subnets(project_dir);
+
+    select_subnets(
+        &preferred,
+        &preferred_ext,
+        our_project.as_deref(),
+        &existing,
+        overlay,
+    )
+}
+
+/// Pure subnet selection logic, separated from I/O for testability.
+///
+/// Priority:
+/// 1. Actual Docker network subnets (if our networks already exist)
+/// 2. Overlay file subnets (if networks are gone but overlay is intact)
+/// 3. Preferred (hash-derived) subnets (if no collisions)
+/// 4. Collision-avoidance search
+fn select_subnets(
+    preferred: &str,
+    preferred_ext: &str,
+    our_project: Option<&str>,
+    existing: &HashMap<String, String>,
+    overlay: Option<(String, String)>,
+) -> (String, String) {
+    let our_networks: HashSet<String> = match our_project {
         Some(p) => [format!("{p}_kap_sandbox"), format!("{p}_kap_external")]
             .into_iter()
             .collect(),
         None => HashSet::new(),
     };
 
-    let existing = query_docker_subnets();
+    // If our networks already exist in Docker, use their ACTUAL subnets.
+    // Docker Compose won't recreate existing networks, so the overlay must
+    // match reality — not the other way around.
+    if let Some(p) = our_project {
+        let sb_name = format!("{p}_kap_sandbox");
+        let ext_name = format!("{p}_kap_external");
+        if let (Some(sb_cidr), Some(ext_cidr)) = (existing.get(&sb_name), existing.get(&ext_name))
+            && let (Some(sb), Some(ext)) = (cidr_to_prefix(sb_cidr), cidr_to_prefix(ext_cidr))
+        {
+            return (sb, ext);
+        }
+    }
+
     if existing.is_empty() {
         // No Docker networks at all — prefer the overlay's existing subnet
         // to avoid changing IPs after a Docker restart (containers survive
         // but networks don't, so collision avoidance can pick a different
         // subnet, leaving existing containers with stale env vars).
-        if let Some((sb, ext)) = read_overlay_subnets(project_dir) {
+        if let Some((sb, ext)) = overlay {
             return (sb, ext);
         }
-        return (preferred, preferred_ext);
+        return (preferred.to_string(), preferred_ext.to_string());
     }
 
     // Subnets taken by OTHER projects' networks (as /24 prefixes).
@@ -237,34 +275,34 @@ pub fn find_available_subnets(project_dir: &Path) -> (String, String) {
 
     // Prefer the subnet already in the overlay file to avoid IP drift after
     // Docker restarts. Only fall through if it's now taken by another project.
-    if let Some((sb, ext)) = read_overlay_subnets(project_dir)
+    if let Some((sb, ext)) = overlay
         && !taken.contains(&sb)
         && !taken.contains(&ext)
     {
         return (sb, ext);
     }
 
-    if !taken.contains(&preferred) && !taken.contains(&preferred_ext) {
-        return (preferred, preferred_ext);
+    if !taken.contains(preferred) && !taken.contains(preferred_ext) {
+        return (preferred.to_string(), preferred_ext.to_string());
     }
 
     // Collision — iterate through alternatives, stepping by 2 for pairs
-    let mut sandbox = preferred.clone();
+    let mut sandbox = preferred.to_string();
     for _ in 0..1792 {
         sandbox = match next_subnet(&sandbox).and_then(|s| next_subnet(&s)) {
             Some(c) => c,
-            None => return (preferred, preferred_ext),
+            None => return (preferred.to_string(), preferred_ext.to_string()),
         };
         let external = match next_subnet(&sandbox) {
             Some(c) => c,
-            None => return (preferred, preferred_ext),
+            None => return (preferred.to_string(), preferred_ext.to_string()),
         };
         if !taken.contains(&sandbox) && !taken.contains(&external) {
             return (sandbox, external);
         }
     }
 
-    (preferred, preferred_ext)
+    (preferred.to_string(), preferred_ext.to_string())
 }
 
 /// Advance a subnet prefix to the next /24 in the 172.18-31.x range.
@@ -1886,6 +1924,63 @@ mod tests {
             }
         };
         assert_eq!(result, ("172.28.8".to_string(), "172.28.9".to_string()));
+    }
+
+    #[test]
+    fn select_subnets_uses_actual_docker_networks_over_overlay() {
+        // Bug reproduction: overlay says 10/11 but Docker networks were
+        // actually created with 20/21. The overlay is stale — Docker Compose
+        // won't recreate existing networks, so we must use the real subnets.
+        let mut existing = HashMap::new();
+        existing.insert(
+            "myproject_devcontainer_kap_sandbox".to_string(),
+            "172.28.20.0/24".to_string(),
+        );
+        existing.insert(
+            "myproject_devcontainer_kap_external".to_string(),
+            "172.28.21.0/24".to_string(),
+        );
+
+        let result = select_subnets(
+            "172.28.10",                                    // preferred
+            "172.28.11",                                    // preferred_ext
+            Some("myproject_devcontainer"),                 // our project
+            &existing,                                      // Docker reality
+            Some(("172.28.10".into(), "172.28.11".into())), // stale overlay
+        );
+
+        // Must return 20/21 (Docker reality), NOT 10/11 (stale overlay)
+        assert_eq!(result, ("172.28.20".to_string(), "172.28.21".to_string()));
+    }
+
+    #[test]
+    fn select_subnets_falls_back_to_overlay_when_networks_gone() {
+        // After Docker restart: networks gone, containers survive.
+        // Overlay is our best source of truth.
+        let existing = HashMap::new();
+
+        let result = select_subnets(
+            "172.28.10",
+            "172.28.11",
+            Some("myproject_devcontainer"),
+            &existing,
+            Some(("172.28.10".into(), "172.28.11".into())),
+        );
+
+        assert_eq!(result, ("172.28.10".to_string(), "172.28.11".to_string()));
+    }
+
+    #[test]
+    fn select_subnets_uses_preferred_when_no_overlay_or_networks() {
+        let existing = HashMap::new();
+        let result = select_subnets(
+            "172.28.10",
+            "172.28.11",
+            Some("myproject_devcontainer"),
+            &existing,
+            None,
+        );
+        assert_eq!(result, ("172.28.10".to_string(), "172.28.11".to_string()));
     }
 
     #[test]
