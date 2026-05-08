@@ -69,7 +69,7 @@ jobs:
         if: failure()
         run: |
           DC_DIR=tests/integration/project/.devcontainer
-          docker compose --project-name kap-integration \
+          docker compose --project-name project_devcontainer \
             -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml \
             logs --no-color
 

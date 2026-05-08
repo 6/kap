@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DC_DIR="$SCRIPT_DIR/project/.devcontainer"
-DC="docker compose --project-name kap-integration -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml"
+DC="docker compose --project-name project_devcontainer -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml"
 
 PASS=0
 FAIL=0
@@ -269,24 +269,30 @@ echo "[19] sidecar-init recovers from stale overlay subnets"
 # Simulate the drift scenario: the overlay has wrong subnets (e.g. from a
 # previous bug or Docker recreating networks with different IPs). sidecar-init
 # must detect the actual Docker network subnets and overwrite the stale overlay.
-SANDBOX_NET="kap-integration_kap_sandbox"
+SANDBOX_NET="project_devcontainer_kap_sandbox"
 ACTUAL_SUBNET=$(docker network inspect "$SANDBOX_NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "")
 if [ -z "$ACTUAL_SUBNET" ]; then
   fail "could not inspect $SANDBOX_NET"
 else
-  # Corrupt the overlay with wrong subnets
   OVERLAY="$DC_DIR/docker-compose.kap.yml"
-  sed -i.bak 's|subnet: '"$ACTUAL_SUBNET"'|subnet: 172.18.99.0/24|' "$OVERLAY"
-  CORRUPTED=$(grep -c '172.18.99.0/24' "$OVERLAY")
+  # `|| true` and `|| echo 0` defuse `set -e`: grep -c exits 1 on zero matches,
+  # which would otherwise abort the script before our defensive checks run.
+  sed -i.bak 's|subnet: '"$ACTUAL_SUBNET"'|subnet: 172.18.99.0/24|' "$OVERLAY" || true
+  CORRUPTED=$(grep -c '172.18.99.0/24' "$OVERLAY" || echo 0)
   if [ "$CORRUPTED" -eq 0 ]; then
+    echo "  DEBUG: ACTUAL_SUBNET='$ACTUAL_SUBNET'"
+    echo "  DEBUG: overlay sandbox section:"
+    grep -A5 'kap_sandbox:' "$OVERLAY" | sed 's/^/    /' || true
     fail "failed to corrupt overlay for drift test"
   else
     # Re-run sidecar-init — it should read Docker networks and fix the overlay
-    (cd "$SCRIPT_DIR/project" && kap sidecar-init) >/dev/null 2>&1
-    OVERLAY_SUBNET=$(grep -A2 'kap_sandbox:' "$OVERLAY" | grep 'subnet:' | head -1 | awk '{print $NF}')
+    (cd "$SCRIPT_DIR/project" && kap sidecar-init) >/dev/null 2>&1 || true
+    OVERLAY_SUBNET=$(grep -A5 'kap_sandbox:' "$OVERLAY" | grep 'subnet:' | head -1 | awk '{print $NF}' || echo "")
     if [ "$OVERLAY_SUBNET" = "$ACTUAL_SUBNET" ]; then
       pass "overlay recovered to $ACTUAL_SUBNET after drift"
     else
+      echo "  DEBUG: overlay sandbox section after sidecar-init:"
+      grep -A5 'kap_sandbox:' "$OVERLAY" | sed 's/^/    /' || true
       fail "overlay still wrong ($OVERLAY_SUBNET) after sidecar-init, expected $ACTUAL_SUBNET"
     fi
   fi

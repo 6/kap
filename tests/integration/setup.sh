@@ -114,7 +114,7 @@ JSON
 (cd "$PROJECT_DIR" && kap sidecar-init)
 
 # --- 4. Start containers ---
-DC="docker compose --project-name kap-integration -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml"
+DC="docker compose --project-name project_devcontainer -f $DC_DIR/docker-compose.yml -f $DC_DIR/docker-compose.kap.yml"
 # kap-test and kap-test-app are locally-built images, don't try to pull them
 $DC up -d --wait --wait-timeout 30 --pull never
 

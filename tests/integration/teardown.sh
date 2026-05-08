@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DC_DIR="$SCRIPT_DIR/project/.devcontainer"
 
 if [ -f "$DC_DIR/docker-compose.yml" ] && [ -f "$DC_DIR/docker-compose.kap.yml" ]; then
-  docker compose --project-name kap-integration \
+  docker compose --project-name project_devcontainer \
     -f "$DC_DIR/docker-compose.yml" \
     -f "$DC_DIR/docker-compose.kap.yml" \
     down -v --remove-orphans 2>/dev/null || true
